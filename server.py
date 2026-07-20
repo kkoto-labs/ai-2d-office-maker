@@ -2,7 +2,7 @@
 """ビューア配信 + ブラウザからの指示を受け付けるローカルサーバー。
 localhost専用（他マシンからはアクセスできません）。
 エージェントごとに state/sessions/<AGENT_ID>.txt へセッションIDを記録し、
-それを --resume することで、talk_to_*.sh からの直接会話と記憶を共有する。"""
+それを --resume することで、同じキャラへの指示が過去の会話を引き継ぐ。"""
 import fcntl
 import json
 import os
