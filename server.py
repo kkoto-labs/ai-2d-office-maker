@@ -8,6 +8,7 @@ import json
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -166,8 +167,27 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
 
+def watch_self_and_reload(httpd, interval=1.0):
+    """server.py自身が編集されたら、ポートを解放して自分自身を再起動する。
+    手動でkill/restartしなくても、次のブラウザからの指示から新しいコードが
+    使われるようにするため。"""
+    path = os.path.abspath(__file__)
+    last_mtime = os.path.getmtime(path)
+    while True:
+        time.sleep(interval)
+        try:
+            mtime = os.path.getmtime(path)
+        except FileNotFoundError:
+            continue
+        if mtime != last_mtime:
+            print("[reload] server.py が更新されたため再起動します...", flush=True)
+            httpd.server_close()
+            os.execv(sys.executable, [sys.executable, "-u", path])
+
+
 if __name__ == "__main__":
     threading.Thread(target=worker_loop, daemon=True).start()
     httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"AI見える化オフィス: http://localhost:{PORT}/viewer/")
+    threading.Thread(target=watch_self_and_reload, args=(httpd,), daemon=True).start()
+    print(f"AI見える化オフィス: http://localhost:{PORT}/viewer/", flush=True)
     httpd.serve_forever()
