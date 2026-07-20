@@ -1,0 +1,48 @@
+{
+  "agents": {
+    "S": {
+      "name": "ユイ",
+      "dept": "秘書室",
+      "role": "秘書",
+      "state": "idle",
+      "detail": "出社しました",
+      "updated_at": 0,
+      "log": [],
+      "queue_len": 0,
+      "active_subagents": []
+    },
+    "P": {
+      "name": "発田案",
+      "dept": "企画部",
+      "role": "PM",
+      "state": "idle",
+      "detail": "出社しました",
+      "updated_at": 0,
+      "log": [],
+      "queue_len": 0,
+      "active_subagents": []
+    },
+    "D": {
+      "name": "築山創",
+      "dept": "開発部",
+      "role": "PM",
+      "state": "idle",
+      "detail": "出社しました",
+      "updated_at": 0,
+      "log": [],
+      "queue_len": 0,
+      "active_subagents": []
+    },
+    "M": {
+      "name": "広瀬映",
+      "dept": "広報・マーケティング部",
+      "role": "PM",
+      "state": "idle",
+      "detail": "出社しました",
+      "updated_at": 0,
+      "log": [],
+      "queue_len": 0,
+      "active_subagents": []
+    }
+  }
+}

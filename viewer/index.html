@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>AI見える化オフィス</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>AI見える化オフィス</h1>
+    <div class="topbar-sub">秘書室・企画部・開発部・広報マーケ部</div>
+  </header>
+
+  <section class="console-panel">
+    <div class="console-form-row">
+      <form id="instruct-form">
+        <select id="instruct-target"></select>
+        <textarea id="instruct-input" rows="2" placeholder="指示を入力..."></textarea>
+        <button type="submit">指示を送る</button>
+      </form>
+      <div class="instruct-status" id="instruct-status"></div>
+    </div>
+    <div class="console-reply" id="report-panel">
+      <h2 id="report-title">回答</h2>
+      <div id="report-text">まだ報告はありません。</div>
+    </div>
+  </section>
+
+  <main class="floor">
+    <div class="rooms" id="rooms"></div>
+
+    <aside class="activity-log">
+      <div class="log-header">
+        <h2>活動ログ</h2>
+        <button type="button" id="log-toggle" class="log-toggle" aria-expanded="false">▼ すべて表示</button>
+      </div>
+      <div class="log-latest" id="log-latest"></div>
+      <ul id="log-list" class="log-full"></ul>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

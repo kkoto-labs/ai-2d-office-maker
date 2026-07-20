@@ -1,0 +1,11 @@
+# 実行時に生成される個人のセッション情報（会話の記憶）
+state/sessions/
+state/agents.json.lock
+
+# 実際の利用で生成された成果物（テンプレートには含めない）
+lp/
+
+# OS / エディタ
+.DS_Store
+__pycache__/
+*.pyc
