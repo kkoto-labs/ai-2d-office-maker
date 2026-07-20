@@ -110,7 +110,7 @@ frontmatterの`name`/`description`/`tools`と、本文に「人格」と「仕�
 `キャラチップ/`および`viewer/assets/characters/`内のドット絵は「ぴぽや」様の
 フリー素材を使用しています（商用・非商用問わず利用OK、加工OK、二次配布OK、
 クレジット表記不要）。詳細は`viewer/assets/characters/LICENSE_pipoya.txt`を
-参照してください。 (http://piposozai.blog76.fc2.com)
+参照してください。 (https://pipoya.net/sozai/)
 
 ## 既知の制限
 
