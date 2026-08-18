@@ -305,7 +305,10 @@ function renderAgent(agent, data) {
   const statusEl = document.getElementById(`status-${agent.id}`);
   if (!charEl) return;
 
-  charEl.className = `character ${state}`;
+  // 状態（待機/作業/相談…）に加えて、何をしている作業なのかで動きを変える。
+  // 「作業中」だけでは、書いているのか読んでいるのかが見て分からない。
+  const activity = state === "working" ? (data.activity || "think") : state;
+  charEl.className = `character ${state} act-${activity}`;
 
   bubbleEl.textContent = detail;
   bubbleEl.classList.toggle("show",

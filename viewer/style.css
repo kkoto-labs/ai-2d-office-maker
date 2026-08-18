@@ -520,6 +520,52 @@ body {
 .log-full li .log-dept { color: #7fa8d9; flex-shrink: 0; }
 .log-full li .log-detail { color: #dbe2ec; word-break: break-word; flex-basis: 100%; }
 
+/* ---- 作業内容ごとの動き --------------------------------------------------
+   キャラチップは3列×4行で、行は 下・左・右・上 の向き。これまで正面(行0)しか
+   使っていなかったが、上向き(行3)は机に向かった後ろ姿になる。手を動かす作業を
+   そこに充てると、こちらを向いて待っているのか作業中なのかが一目で分かる。
+   1コマ96px相当なので、行は 0 / -96 / -192 / -288 px。 */
+
+/* 書く: 机に向かって速くタイプする */
+.character.working.act-edit .sprite { animation: type-fast 0.34s infinite; }
+@keyframes type-fast {
+  0%, 100% { background-position: 0 -288px; animation-timing-function: steps(1); }
+  50% { background-position: -192px -288px; animation-timing-function: steps(1); }
+}
+
+/* 動かす: 机に向かい、実行結果を待ちながらゆっくり */
+.character.working.act-run .sprite { animation: type-slow 1.1s infinite; }
+@keyframes type-slow {
+  0%, 100% { background-position: -96px -288px; animation-timing-function: steps(1); }
+  50% { background-position: 0 -288px; animation-timing-function: steps(1); }
+}
+
+/* 読む: 正面のまま、静かに視線を動かす */
+.character.working.act-read .sprite { animation: read-sway 1.9s infinite; }
+@keyframes read-sway {
+  0%, 45% { background-position: -96px 0; animation-timing-function: steps(1); }
+  50%, 95% { background-position: 0 0; animation-timing-function: steps(1); }
+  100% { background-position: -96px 0; }
+}
+
+/* 調べる: 左右を見回す */
+.character.working.act-web .sprite { animation: look-around 2.2s infinite; }
+@keyframes look-around {
+  0%, 45% { background-position: -96px -96px; animation-timing-function: steps(1); }
+  50%, 95% { background-position: -96px -192px; animation-timing-function: steps(1); }
+  100% { background-position: -96px -96px; }
+}
+
+/* 任せる: 部下のほうを向いて指示を出す */
+.character.working.act-delegate .sprite { animation: instruct 0.9s infinite; }
+@keyframes instruct {
+  0%, 100% { background-position: -96px -96px; animation-timing-function: steps(1); }
+  50% { background-position: -192px -96px; animation-timing-function: steps(1); }
+}
+
+/* 考える: 正面でゆっくり */
+.character.working.act-think .sprite { animation: sprite-sway 2.4s infinite; }
+
 /* ---- ロビー（管理外のセッション） --------------------------------------- */
 
 .side-panels {

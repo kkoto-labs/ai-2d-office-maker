@@ -104,6 +104,23 @@ def consult_target(command):
     return AGENT_REGISTRY.get(agent_id, {}).get("name", agent_id)
 
 
+# ツールを「何をしている様子か」に束ねる。画面の動きはこの分類で決まる。
+# ツール名そのままだと種類が多すぎて、見た目を作り分けられない。
+ACTIVITY_BY_TOOL = {
+    "Edit": "edit", "Write": "edit", "NotebookEdit": "edit",
+    "Read": "read", "Grep": "read", "Glob": "read",
+    "Bash": "run", "PowerShell": "run",
+    "WebFetch": "web", "WebSearch": "web",
+    "Agent": "delegate", "Task": "delegate",
+}
+
+
+def tool_activity(tool_name, tool_input):
+    if tool_name == "Bash" and consult_target((tool_input or {}).get("command")):
+        return "consult"
+    return ACTIVITY_BY_TOOL.get(tool_name, "think")
+
+
 def tool_detail(tool_name, tool_input):
     ti = tool_input or {}
     if tool_name == "Bash":
@@ -134,28 +151,29 @@ def build_update(data):
     prompt = data.get("prompt", "")
 
     if event == "SessionStart":
-        return "idle", "出社しました"
+        return "idle", "出社しました", "rest"
     if event == "UserPromptSubmit":
-        return "thinking", f"社長の指示を検討中: {prompt[:30]}"
+        return "thinking", f"社長の指示を検討中: {prompt[:30]}", "think"
     # 他部署への相談は、ツール名を頭に付けず状態も分ける。
     # 「Bash: ...」では、社内で誰と話しているのかが画面から読めない。
     consulting = consult_target(tool_input.get("command")) if tool_name == "Bash" else None
 
     if event == "PreToolUse":
         if consulting:
-            return "consulting", f"{consulting}に相談中"
-        return "working", f"{tool_name}: {tool_detail(tool_name, tool_input)}"
+            return "consulting", f"{consulting}に相談中", "consult"
+        return ("working", f"{tool_name}: {tool_detail(tool_name, tool_input)}",
+                tool_activity(tool_name, tool_input))
     if event == "PostToolUse":
         if consulting:
-            return "working", f"{consulting}から回答を受領"
-        return "working", f"{tool_name} 完了"
+            return "working", f"{consulting}から回答を受領", "consult"
+        return "working", f"{tool_name} 完了", tool_activity(tool_name, tool_input)
     if event == "Stop":
-        return "reporting", "社長へ報告中"
+        return "reporting", "社長へ報告中", "report"
     if event == "SubagentStart":
-        return "working", f"部下({data.get('agent_type', '?')})に作業を依頼"
+        return "working", f"部下({data.get('agent_type', '?')})に作業を依頼", "delegate"
     if event == "SubagentStop":
-        return "working", f"部下({data.get('agent_type', '?')})から報告を受領"
-    return None, None
+        return "working", f"部下({data.get('agent_type', '?')})から報告を受領", "delegate"
+    return None, None, None
 
 
 def main():
@@ -166,7 +184,7 @@ def main():
         return
 
     event = data.get("hook_event_name", "")
-    state, detail = build_update(data)
+    state, detail, activity = build_update(data)
     if state is None:
         return
 
@@ -180,6 +198,7 @@ def main():
         agent.update(meta)
         agent["state"] = state
         agent["detail"] = detail
+        agent["activity"] = activity
         agent["updated_at"] = now.timestamp()
 
         active = agent.setdefault("active_subagents", [])
