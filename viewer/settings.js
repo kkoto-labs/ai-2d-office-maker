@@ -245,6 +245,21 @@ function agentNavItem(agent) {
 }
 
 function renderSettingsEditor() {
+  // 描画の途中で落ちると、前の画面が残ったまま左の選択だけが動く。別人の
+  // フォームを編集してしまうので、失敗したことを画面に出して止める。
+  try {
+    renderSelectedEditor();
+  } catch (e) {
+    document.getElementById("settings-editor").innerHTML =
+      `<section class="edit-section"><h3>表示できません</h3>
+        <p class="warn">この画面の描画に失敗しました: ${escapeHtml(e.message)}</p>
+        <p class="hint">設定は保存されていません。別の項目を選ぶか、
+        ページを再読み込みしてやり直してください。</p></section>`;
+    throw e;
+  }
+}
+
+function renderSelectedEditor() {
   const el = document.getElementById("settings-editor");
   if (selectedKey === PROJECTS_KEY) {
     renderProjectsEditor(el);
@@ -643,7 +658,7 @@ function renameDept(from, to) {
 
 // ---- 組織図 ---------------------------------------------------------------
 
-const CHART = { w: 150, h: 86, gapX: 20, gapY: 74, pad: 24 };
+const CHART = { w: 178, h: 92, gapX: 20, gapY: 74, pad: 24 };
 // 組織図で選んでいるノード。図の横のパネルはこれを見て中身を変える。
 let chartSelection = null;
 
@@ -744,17 +759,25 @@ function tidyPositions(rows, parentOf) {
   const centerX = new Map();
   let nextLeaf = 0;
 
+  // 相談関係は循環しうる（互いを相談先にするなど）。たどっている途中の
+  // ものを覚えておかないと、親子をぐるぐる回って再帰が止まらなくなる。
+  const visiting = new Set();
+
   const place = (id) => {
-    const kids = children.get(id) || [];
-    if (!kids.length) {
+    if (centerX.has(id) || visiting.has(id)) return;
+    visiting.add(id);
+
+    const kids = (children.get(id) || []).filter((k) => k !== id && !visiting.has(k));
+    for (const kid of kids) place(kid);
+
+    const placed = kids.map((k) => centerX.get(k)).filter((v) => v !== undefined);
+    if (placed.length) {
+      centerX.set(id, (Math.min(...placed) + Math.max(...placed)) / 2);
+    } else {
       centerX.set(id, nextLeaf * slot + CHART.w / 2);
       nextLeaf += 1;
-      return;
     }
-    for (const kid of kids) place(kid);
-    const first = centerX.get(kids[0]);
-    const last = centerX.get(kids[kids.length - 1]);
-    centerX.set(id, (first + last) / 2);
+    visiting.delete(id);
   };
 
   // 親を持たないものが根。循環していても、置き終えたものは二度置かない。

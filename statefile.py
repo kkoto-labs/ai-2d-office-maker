@@ -80,19 +80,54 @@ def write_state(path, store):
     瞬間に os.replace が PermissionError になりうるので短くリトライする。
     """
     tmp_path = f"{path}.{os.getpid()}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(store, f, ensure_ascii=False, indent=2)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=2)
 
-    deadline = time.monotonic() + REPLACE_TIMEOUT
-    while True:
+        deadline = time.monotonic() + REPLACE_TIMEOUT
+        while True:
+            try:
+                os.replace(tmp_path, path)
+                break
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+    finally:
+        # 置換まで進めなかった場合の後始末。os.replace が成功していれば
+        # 名前が変わっているので、ここでは何も消えない。
+        _discard(tmp_path)
+
+    _sweep_stale_temps(path)
+
+
+def _discard(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _sweep_stale_temps(path, max_age=60.0):
+    """書きかけのまま取り残された一時ファイルを片付ける。
+
+    フックはツール実行のたびに別プロセスで動き、途中で打ち切られることが
+    ある。強制終了だと後始末が走らないので、壊れた一時ファイルが残り続ける。
+    実害はないが、放っておくと際限なく増える。
+    """
+    directory = os.path.dirname(path) or "."
+    prefix, suffix = os.path.basename(path) + ".", ".tmp"
+    now = time.time()
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        if not (name.startswith(prefix) and name.endswith(suffix)):
+            continue
+        stale = os.path.join(directory, name)
         try:
-            os.replace(tmp_path, path)
-            return
-        except PermissionError:
-            if time.monotonic() >= deadline:
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-                raise
-            time.sleep(0.05)
+            if now - os.path.getmtime(stale) > max_age:
+                os.remove(stale)
+        except OSError:
+            continue

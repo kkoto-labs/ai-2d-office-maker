@@ -6,6 +6,7 @@ const STATE_LABEL = {
   idle: "待機中",
   thinking: "検討中",
   working: "作業中",
+  consulting: "相談中",
   reporting: "報告中",
 };
 
@@ -260,7 +261,8 @@ function renderAgent(agent, data) {
   charEl.className = `character ${state}`;
 
   bubbleEl.textContent = detail;
-  bubbleEl.classList.toggle("show", state === "working" || state === "reporting");
+  bubbleEl.classList.toggle("show",
+    state === "working" || state === "consulting" || state === "reporting");
 
   statusEl.className = `status-badge ${state}`;
   let statusText = STATE_LABEL[state] || state;

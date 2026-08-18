@@ -5,6 +5,7 @@
 ファイルロックで直列化し、一時ファイル名もプロセスごとに一意にしている。"""
 import json
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -33,10 +34,48 @@ def load_registry():
 
 
 AGENT_REGISTRY = load_registry()
-AGENT_ID = os.environ.get("AI_MIERUKA_AGENT") or next(iter(AGENT_REGISTRY), "P")
-AGENT_META = AGENT_REGISTRY.get(AGENT_ID, FALLBACK_META)
+SESSION_DIR = os.path.join(BASE_DIR, "state", "sessions")
 
 MAX_LOG = 30
+
+
+def agent_from_session(session_id):
+    """記録済みのセッションIDから、どのキャラのものかを引く。
+
+    server.py はキャラごとのセッションIDを state/sessions/<ID>.txt に控えている。
+    環境変数が届かない経路（サブエージェントなど）でも、ここから本人が分かる。
+    """
+    if not session_id:
+        return None
+    try:
+        names = os.listdir(SESSION_DIR)
+    except OSError:
+        return None
+    for filename in names:
+        if not filename.endswith(".txt"):
+            continue
+        try:
+            with open(os.path.join(SESSION_DIR, filename), encoding="utf-8") as f:
+                if f.read().strip() == session_id:
+                    return filename[:-len(".txt")]
+        except OSError:
+            continue
+    return None
+
+
+def resolve_agent(data):
+    """このフックがどのキャラのものかを決める。無関係なら None。
+
+    以前は分からないときに先頭のキャラへ書き込んでいた。そのため、この
+    リポジトリで手元の claude を開いただけで、秘書が勝手に働いているように
+    見えていた。誰か分からないものは、誰でもないものとして扱う。
+    """
+    agent_id = os.environ.get("AI_MIERUKA_AGENT")
+    if not agent_id:
+        agent_id = agent_from_session(data.get("session_id"))
+    if not agent_id:
+        return None
+    return agent_id
 
 
 def load_stdin():
@@ -47,10 +86,31 @@ def load_stdin():
         return {}
 
 
+# 他部署への相談は、claude を子プロセスとして起動するBashコマンドで行う。
+# 宛先は AI_MIERUKA_AGENT で渡しているので、そこから相手を読み取る。
+CONSULT_RE = re.compile(r"AI_MIERUKA_AGENT=([A-Za-z0-9_-]+)\s+\S*claude\b")
+
+
+def consult_target(command):
+    """相談コマンドなら宛先の表示名を返す。違えば None。
+
+    コマンド文には if 分岐の両側が入るので、同じIDが2回現れる。宛先は
+    1つなので最初の1件だけを見る。
+    """
+    match = CONSULT_RE.search(command or "")
+    if not match:
+        return None
+    agent_id = match.group(1)
+    return AGENT_REGISTRY.get(agent_id, {}).get("name", agent_id)
+
+
 def tool_detail(tool_name, tool_input):
     ti = tool_input or {}
     if tool_name == "Bash":
-        return (ti.get("command") or "")[:40]
+        command = ti.get("command") or ""
+        # 生のコマンドを出しても、社内の誰と話しているのかは読み取れない。
+        target = consult_target(command)
+        return f"{target}に相談中" if target else command[:40]
     if tool_name in ("Read", "Edit", "Write", "NotebookEdit"):
         fp = ti.get("file_path") or ti.get("notebook_path") or ""
         return os.path.basename(fp)
@@ -77,9 +137,17 @@ def build_update(data):
         return "idle", "出社しました"
     if event == "UserPromptSubmit":
         return "thinking", f"社長の指示を検討中: {prompt[:30]}"
+    # 他部署への相談は、ツール名を頭に付けず状態も分ける。
+    # 「Bash: ...」では、社内で誰と話しているのかが画面から読めない。
+    consulting = consult_target(tool_input.get("command")) if tool_name == "Bash" else None
+
     if event == "PreToolUse":
+        if consulting:
+            return "consulting", f"{consulting}に相談中"
         return "working", f"{tool_name}: {tool_detail(tool_name, tool_input)}"
     if event == "PostToolUse":
+        if consulting:
+            return "working", f"{consulting}から回答を受領"
         return "working", f"{tool_name} 完了"
     if event == "Stop":
         return "reporting", "社長へ報告中"
@@ -92,18 +160,24 @@ def build_update(data):
 
 def main():
     data = load_stdin()
+    agent_id = resolve_agent(data)
+    if agent_id is None:
+        # このオフィスと関係のないセッション。誰の状態も書き換えない。
+        return
+
     event = data.get("hook_event_name", "")
     state, detail = build_update(data)
     if state is None:
         return
 
+    meta = AGENT_REGISTRY.get(agent_id, FALLBACK_META)
     with state_lock(LOCK_PATH):
         store = load_state(STATE_PATH)
 
         agents = store.setdefault("agents", {})
         now = datetime.now()
-        agent = agents.setdefault(AGENT_ID, {**AGENT_META, "log": []})
-        agent.update(AGENT_META)
+        agent = agents.setdefault(agent_id, {**meta, "log": []})
+        agent.update(meta)
         agent["state"] = state
         agent["detail"] = detail
         agent["updated_at"] = now.timestamp()
