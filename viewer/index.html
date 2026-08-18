@@ -7,8 +7,11 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>AI見える化オフィス</h1>
-    <div class="topbar-sub">秘書室・企画部・開発部・広報マーケ部</div>
+    <div class="topbar-title">
+      <h1>AI見える化オフィス</h1>
+      <div class="topbar-sub" id="topbar-sub">読み込み中...</div>
+    </div>
+    <button type="button" class="topbar-button" id="settings-open">⚙ 設定</button>
   </header>
 
   <section class="console-panel">
@@ -38,6 +41,39 @@
       <ul id="log-list" class="log-full"></ul>
     </aside>
   </main>
+
+  <div class="modal-backdrop" id="settings-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="modal-head">
+        <h2 id="settings-title">エージェント設定</h2>
+        <button type="button" class="modal-close" id="settings-close" aria-label="閉じる">×</button>
+      </header>
+      <div class="modal-body">
+        <nav class="settings-nav">
+          <ul id="settings-nav-list"></ul>
+          <button type="button" class="nav-add" id="agent-add">＋ エージェントを追加</button>
+        </nav>
+        <div class="settings-editor" id="settings-editor"></div>
+      </div>
+      <footer class="modal-foot">
+        <div class="settings-status" id="settings-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="settings-cancel">キャンセル</button>
+          <button type="button" class="btn-primary" id="settings-save">保存</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <div class="modal-backdrop sprite-backdrop" id="sprite-modal" hidden>
+    <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="sprite-title">
+      <header class="modal-head">
+        <h2 id="sprite-title">キャラクター画像を選ぶ</h2>
+        <button type="button" class="modal-close" id="sprite-close" aria-label="閉じる">×</button>
+      </header>
+      <div class="sprite-grid" id="sprite-grid"></div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

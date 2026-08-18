@@ -17,15 +17,24 @@ LOCK_PATH = STATE_PATH + ".lock"
 sys.path.insert(0, BASE_DIR)
 from statefile import load_state, state_lock, write_state  # noqa: E402
 
-AGENT_REGISTRY = {
-    "P": {"name": "発田案", "dept": "企画部", "role": "PM"},
-    "D": {"name": "築山創", "dept": "開発部", "role": "PM"},
-    "M": {"name": "広瀬映", "dept": "広報・マーケティング部", "role": "PM"},
-    "S": {"name": "ユイ", "dept": "秘書室", "role": "秘書"},
-}
+# 設定が読めなくてもフックは落とさない。ここで例外を投げると、
+# セッション中のあらゆるツール実行が巻き添えで失敗するため。
+FALLBACK_META = {"name": "不明", "dept": "未設定", "role": ""}
 
-AGENT_ID = os.environ.get("AI_MIERUKA_AGENT", "P")
-AGENT_META = AGENT_REGISTRY.get(AGENT_ID, AGENT_REGISTRY["P"])
+
+def load_registry():
+    try:
+        import officeconfig
+        cfg = officeconfig.load()
+        return {a["id"]: {"name": a["name"], "dept": a["dept"], "role": a["role"]}
+                for a in cfg.get("agents", [])}
+    except Exception:
+        return {}
+
+
+AGENT_REGISTRY = load_registry()
+AGENT_ID = os.environ.get("AI_MIERUKA_AGENT") or next(iter(AGENT_REGISTRY), "P")
+AGENT_META = AGENT_REGISTRY.get(AGENT_ID, FALLBACK_META)
 
 MAX_LOG = 30
 

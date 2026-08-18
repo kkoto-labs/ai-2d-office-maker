@@ -1,0 +1,81 @@
+{
+  "projects": {
+    "self": {
+      "name": "AI見える化オフィス",
+      "path": "."
+    }
+  },
+  "agents": [
+    {
+      "id": "S",
+      "name": "ユイ",
+      "dept": "秘書室",
+      "role": "秘書",
+      "sprite": "pipo-charachip017.png",
+      "soul": "ユイ.md",
+      "projects": [
+        "self"
+      ],
+      "consults": [
+        "P",
+        "D",
+        "M"
+      ],
+      "subagents": []
+    },
+    {
+      "id": "P",
+      "name": "発田案",
+      "dept": "企画部",
+      "role": "PM",
+      "sprite": "pipo-charachip015a.png",
+      "soul": "発田案.md",
+      "projects": [
+        "self"
+      ],
+      "consults": [],
+      "subagents": []
+    },
+    {
+      "id": "D",
+      "name": "築山創",
+      "dept": "開発部",
+      "role": "PM",
+      "sprite": "pipo-charachip025.png",
+      "soul": "築山創.md",
+      "projects": [
+        "self"
+      ],
+      "consults": [],
+      "subagents": [
+        "明石要",
+        "設楽構",
+        "織田創",
+        "見城評",
+        "精田照",
+        "試崎験"
+      ]
+    },
+    {
+      "id": "M",
+      "name": "広瀬映",
+      "dept": "広報・マーケティング部",
+      "role": "PM",
+      "sprite": "pipo-charachip021.png",
+      "soul": "広瀬映.md",
+      "projects": [
+        "self"
+      ],
+      "consults": [],
+      "subagents": []
+    }
+  ],
+  "subagent_sprites": {
+    "明石要": "pipo-charachip003.png",
+    "精田照": "pipo-charachip002a.png",
+    "織田創": "pipo-charachip001b.png",
+    "見城評": "pipo-charachip004.png",
+    "設楽構": "pipo-charachip016.png",
+    "試崎験": "pipo-charachip007.png"
+  }
+}

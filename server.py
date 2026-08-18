@@ -14,6 +14,7 @@ import time
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
+import officeconfig
 from statefile import load_state, state_lock, write_state
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,14 +22,7 @@ STATE_PATH = os.path.join(BASE_DIR, "state", "agents.json")
 LOCK_PATH = STATE_PATH + ".lock"
 SESSION_DIR = os.path.join(BASE_DIR, "state", "sessions")
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
-SOULS_DIR = os.path.join(BASE_DIR, "souls")
 PORT = 8420
-
-VALID_AGENTS = {"P", "D", "M", "S"}
-DEFAULT_AGENT = "P"
-
-# 内部ID(セッションファイル名・env var用)と、実際の人物名(souls/*.md用)の対応。
-AGENT_NAMES = {"P": "発田案", "D": "築山創", "M": "広瀬映", "S": "ユイ"}
 
 task_queue = queue.Queue()
 queue_len_lock = threading.Lock()
@@ -39,18 +33,107 @@ def session_file(agent_id):
     return os.path.join(SESSION_DIR, f"{agent_id}.txt")
 
 
-def system_prompt_for(agent_id):
-    parts = []
-    name = AGENT_NAMES.get(agent_id, agent_id)
-    soul_path = os.path.join(SOULS_DIR, f"{name}.md")
-    if os.path.exists(soul_path):
-        with open(soul_path, encoding="utf-8") as f:
-            parts.append(f.read())
-    role_path = os.path.join(PROMPTS_DIR, f"{agent_id}.txt")
+def system_prompt_for(cfg, agent):
+    """SOUL(人格) + 役割プロンプト + 関係性(自動生成) を連結する。
+
+    関係性のブロックだけは config から毎回組み立てる。部下や相談先を
+    prompts/*.txt に手書きしていた頃は、設定を変えても本文が古いままになり
+    実態とプロンプトがずれていた。
+    """
+    # 名乗りも設定から組み立てる。prompts/*.txt に名前を書いていた頃は、
+    # 設定画面で改名しても本文が古い名前のままになっていた。
+    parts = [
+        f"あなたは「AI見える化」という社内シミュレーションの{agent['dept']}"
+        f"{agent['role']}、{agent['name']}(内部ID: {agent['id']})です。"
+    ]
+
+    soul = officeconfig.read_soul(agent["soul"])
+    if soul.strip():
+        parts.append(soul)
+
+    role_path = os.path.join(PROMPTS_DIR, f"{agent['id']}.txt")
     if os.path.exists(role_path):
         with open(role_path, encoding="utf-8") as f:
             parts.append(f.read())
+
+    projects = project_prompt(cfg, agent)
+    if projects:
+        parts.append(projects)
+
+    relations = relationship_prompt(cfg, agent)
+    if relations:
+        parts.append(relations)
+
     return "\n\n".join(parts) if parts else None
+
+
+def project_prompt(cfg, agent):
+    """担当プロジェクトを伝える。2つ目以降がある場合だけ書く。
+
+    1つだけならカレントディレクトリがそれなので、わざわざ説明する必要がない。
+    """
+    keys = agent.get("projects") or []
+    if len(keys) < 2:
+        return ""
+
+    defined = cfg.get("projects") or {}
+    paths = officeconfig.project_paths(cfg, agent)
+    lines = [f"- {defined.get(k, {}).get('name', k)}: {p}" for k, p in zip(keys, paths)]
+    return ("あなたは以下のプロジェクトを担当しています。1つ目が現在の作業ディレクトリで、\n"
+            "残りも読み書きできます:\n\n" + "\n".join(lines))
+
+
+def relationship_prompt(cfg, agent):
+    """設定された部下・相談先を、そのままプロンプトに使える文章にする。"""
+    blocks = []
+
+    subagents = agent.get("subagents") or []
+    if subagents:
+        described = {s["name"]: s["description"] for s in officeconfig.subagent_catalog()}
+        lines = [f"- {name}: {described.get(name, '')}".rstrip() for name in subagents]
+        blocks.append(
+            "あなたの部下として、以下のサブエージェントが用意されています。仕事の内容に\n"
+            "応じて、Agentツールで名前を指定して使い分けてください。1人で何でもこなそうと\n"
+            "せず、規模のある仕事は適切な相手に振ってください:\n\n" + "\n".join(lines))
+
+    consults = agent.get("consults") or []
+    if consults:
+        by_id = officeconfig.agent_map(cfg)
+        lines = [f"- {by_id[c]['name']} ({c}): {by_id[c]['dept']}"
+                 for c in consults if c in by_id]
+        blocks.append(
+            "以下の部署に直接相談できます:\n\n" + "\n".join(lines) + "\n\n"
+            + consult_recipe(consults))
+
+    return "\n\n".join(blocks)
+
+
+def consult_recipe(consults):
+    """他部署への相談に使う Bash コマンドの雛形。
+
+    セッションIDの生成にはこのサーバーを動かしている Python
+    (sys.executable) をフルパスで埋め込む。プロンプトに "python3" と
+    書いていた頃は、Windows で Microsoft Store のスタブに解決されて
+    相談が丸ごと失敗していた。
+    """
+    ids = "・".join(consults)
+    return (
+        f"相談するには、プロジェクトルート(カレントディレクトリ)で以下のBashコマンドを\n"
+        f"実行してください(<部署ID>を {ids} のいずれかに、<相談内容>を実際の相談文に\n"
+        f"置き換える。セッションがまだ無い部署にも対応できるよう、必ずこのif分岐の形で\n"
+        f"実行すること):\n\n"
+        f'if [ -f "state/sessions/<部署ID>.txt" ]; then\n'
+        f'  SID=$(cat "state/sessions/<部署ID>.txt")\n'
+        f'  AI_MIERUKA_AGENT=<部署ID> claude -p "<相談内容>" --resume "$SID" '
+        f'--permission-mode auto --output-format text\n'
+        f"else\n"
+        f'  SID=$("{sys.executable}" -c "import uuid; print(uuid.uuid4())")\n'
+        f'  echo "$SID" > "state/sessions/<部署ID>.txt"\n'
+        f'  AI_MIERUKA_AGENT=<部署ID> claude -p "<相談内容>" --session-id "$SID" '
+        f'--permission-mode auto --output-format text\n'
+        f"fi\n\n"
+        f"このコマンドの標準出力が、その部署からの回答です。複数の部署に相談する場合は、\n"
+        f"それぞれ個別にこの形式で実行してください(並行して構いません)。")
 
 
 def patch_state(agent_id, **fields):
@@ -66,6 +149,43 @@ def set_queue_len(agent_id, delta):
         n = queue_len_by_agent.get(agent_id, 0) + delta
         queue_len_by_agent[agent_id] = n
     patch_state(agent_id, queue_len=n)
+
+
+dialog_lock = threading.Lock()
+
+
+def pick_directory(initial):
+    """ネイティブのフォルダ選択ダイアログを開き、選ばれたパスを返す。
+
+    キャンセルされたら None。ダイアログは別プロセス(dirpicker.py)で開く。
+    """
+    script = os.path.join(BASE_DIR, "dirpicker.py")
+    start = initial if os.path.isdir(initial or "") else BASE_DIR
+    cmd = [sys.executable, "-X", "utf8", script, start]
+
+    # ダイアログは1つずつ。連打で何枚も開くと、どれがどれだか分からなくなる。
+    with dialog_lock:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", timeout=600)
+
+    if result.returncode != 0:
+        detail = result.stderr.strip()[:300]
+        raise RuntimeError(detail or f"ダイアログが異常終了しました (exit={result.returncode})")
+    return result.stdout.strip() or None
+
+
+def relative_to_base(path):
+    """リポジトリ配下ならリポジトリからの相対パスにする。
+
+    設定ファイルを別のマシンへ持っていっても壊れにくくするため。
+    別ドライブなど相対にできない場合は絶対パスのまま返す。
+    """
+    abs_path = os.path.abspath(path)
+    try:
+        rel = os.path.relpath(abs_path, BASE_DIR)
+    except ValueError:  # 別ドライブ同士は相対にできない
+        rel = ".."
+    return (abs_path if rel.startswith("..") else rel).replace("\\", "/")
 
 
 def claude_bin():
@@ -89,6 +209,14 @@ def run_instruction(agent_id, instruction):
     env = os.environ.copy()
     env["AI_MIERUKA_AGENT"] = agent_id
 
+    cfg = officeconfig.load()
+    agent = officeconfig.agent_map(cfg).get(agent_id)
+    if not agent:
+        raise ValueError(f"エージェント {agent_id} は設定に存在しません。")
+
+    # 担当プロジェクトの1つ目で動かし、2つ目以降は --add-dir で触れるようにする。
+    workdir, *extra_dirs = officeconfig.project_paths(cfg, agent)
+
     if os.path.exists(sess_path):
         with open(sess_path, encoding="utf-8") as f:
             session_id = f.read().strip()
@@ -99,11 +227,14 @@ def run_instruction(agent_id, instruction):
         cmd = [claude_bin(), "-p", instruction, "--permission-mode", "auto",
                "--session-id", session_id, "--output-format", "text"]
 
-    prompt = system_prompt_for(agent_id)
+    for extra in extra_dirs:
+        cmd += ["--add-dir", extra]
+
+    prompt = system_prompt_for(cfg, agent)
     if prompt:
         cmd += ["--append-system-prompt", prompt]
 
-    result = subprocess.run(cmd, cwd=BASE_DIR, env=env, capture_output=True,
+    result = subprocess.run(cmd, cwd=workdir, env=env, capture_output=True,
                              text=True, timeout=1800)
 
     if not os.path.exists(sess_path):
@@ -132,41 +263,163 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
 
-    def do_POST(self):
-        if self.path != "/instruct":
-            self.send_response(404)
-            self.end_headers()
-            return
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            payload = json.loads(raw)
-            instruction = (payload.get("instruction") or "").strip()
-            agent_id = (payload.get("agent_id") or DEFAULT_AGENT).strip()
-        except Exception:
-            instruction = ""
-            agent_id = DEFAULT_AGENT
+    # ---- 共通のレスポンス -------------------------------------------------
 
-        if agent_id not in VALID_AGENTS:
-            agent_id = DEFAULT_AGENT
-
-        if not instruction:
-            body = b'{"error":"empty instruction"}'
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        task_queue.put((agent_id, instruction))
-        set_queue_len(agent_id, 1)
-        body = json.dumps({"status": "queued", "agent_id": agent_id}).encode("utf-8")
-        self.send_response(202)
+    def send_json(self, status, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def read_json(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    # ---- GET --------------------------------------------------------------
+
+    def do_GET(self):
+        if self.path.split("?")[0] == "/api/office":
+            self.handle_get_office()
+            return
+        super().do_GET()
+
+    def handle_get_office(self):
+        """設定画面が必要とするものを一度にまとめて返す。"""
+        try:
+            cfg = officeconfig.load()
+        except Exception as e:
+            self.send_json(500, {"error": f"設定を読み込めません: {e}"})
+            return
+
+        souls = {}
+        for agent in cfg.get("agents", []):
+            try:
+                souls[agent["id"]] = officeconfig.read_soul(agent["soul"])
+            except officeconfig.ConfigError:
+                souls[agent["id"]] = ""
+
+        self.send_json(200, {
+            "config": cfg,
+            "souls": souls,
+            "sprites": officeconfig.available_sprites(),
+            "subagent_catalog": officeconfig.subagent_catalog(),
+        })
+
+    # ---- POST -------------------------------------------------------------
+
+    def do_POST(self):
+        route = {
+            "/instruct": self.handle_instruct,
+            "/api/office": self.handle_save_office,
+            "/api/pick-directory": self.handle_pick_directory,
+        }.get(self.path)
+        if not route:
+            self.send_json(404, {"error": "not found"})
+            return
+        route()
+
+    def handle_instruct(self):
+        payload = self.read_json()
+        instruction = str(payload.get("instruction") or "").strip()
+        agent_id = str(payload.get("agent_id") or "").strip()
+
+        try:
+            valid = set(officeconfig.agent_ids(officeconfig.load()))
+        except Exception as e:
+            self.send_json(500, {"error": f"設定を読み込めません: {e}"})
+            return
+
+        if agent_id not in valid:
+            self.send_json(400, {"error": f"宛先が不正です: {agent_id}"})
+            return
+        if not instruction:
+            self.send_json(400, {"error": "指示が空です。"})
+            return
+
+        task_queue.put((agent_id, instruction))
+        set_queue_len(agent_id, 1)
+        self.send_json(202, {"status": "queued", "agent_id": agent_id})
+
+    def handle_save_office(self):
+        """設定と人格テキストをまとめて保存する。
+
+        SOULを先に書いてから設定を保存する。設定の検証で弾かれた場合に、
+        存在しないSOULファイルを指す設定が残るのを避けたいため。
+        """
+        payload = self.read_json()
+        cfg = payload.get("config")
+        souls = payload.get("souls") or {}
+        subagents = payload.get("subagents")
+
+        try:
+            # サブエージェントを先に反映する。config の subagents は実在する
+            # 定義ファイルだけを残す作りなので、順序が逆だと、この保存で
+            # 新規追加した部下がその場で捨てられてしまう。
+            if isinstance(subagents, dict):
+                self.apply_subagents(subagents)
+
+            validated = officeconfig.validate(cfg)
+            for agent in validated["agents"]:
+                if agent["id"] in souls:
+                    officeconfig.write_soul(agent["soul"], str(souls[agent["id"]]))
+            officeconfig.save(validated)
+        except officeconfig.ConfigError as e:
+            self.send_json(400, {"error": str(e)})
+            return
+        except Exception as e:
+            self.send_json(500, {"error": f"保存に失敗しました: {e}"})
+            return
+
+        self.send_json(200, {
+            "status": "saved",
+            "config": validated,
+            "subagent_catalog": officeconfig.subagent_catalog(),
+        })
+
+    def handle_pick_directory(self):
+        payload = self.read_json()
+        initial = str(payload.get("initial") or "").strip()
+        if initial:
+            initial = os.path.abspath(os.path.join(BASE_DIR, initial))
+
+        try:
+            path = pick_directory(initial)
+        except subprocess.TimeoutExpired:
+            self.send_json(408, {"error": "ダイアログが時間内に閉じられませんでした。"})
+            return
+        except Exception as e:
+            self.send_json(500, {"error": f"フォルダ選択を開けませんでした: {e}"})
+            return
+
+        if not path:
+            self.send_json(200, {"cancelled": True})
+            return
+        self.send_json(200, {"path": relative_to_base(path), "absolute": path})
+
+    def apply_subagents(self, payload):
+        """サブエージェント定義の追加・更新・削除をまとめて反映する。"""
+        entries = payload.get("entries") or []
+
+        # 名前がファイル名になるので、重複すると片方が黙って消える。
+        seen = set()
+        for entry in entries:
+            name = str(entry.get("name") or "").strip()
+            if name in seen:
+                raise officeconfig.ConfigError(
+                    f"サブエージェント名が重複しています: {name}")
+            seen.add(name)
+
+        for filename in payload.get("deleted") or []:
+            officeconfig.delete_subagent(filename)
+        for entry in entries:
+            officeconfig.write_subagent(entry)
 
     def log_message(self, fmt, *args):
         pass

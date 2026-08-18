@@ -1,6 +1,9 @@
 # 実行時に生成される個人のセッション情報（会話の記憶）
 state/sessions/
+
+# 排他制御のためだけに作られるロックファイル
 state/agents.json.lock
+config/office.json.lock
 
 # 状態ファイルの書き込み中に作られる一時ファイル。
 # 通常は os.replace で消えるが、書き込み中にプロセスが落ちると residue が残る。
