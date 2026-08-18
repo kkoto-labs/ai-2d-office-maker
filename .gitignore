@@ -2,6 +2,10 @@
 state/sessions/
 state/agents.json.lock
 
+# 状態ファイルの書き込み中に作られる一時ファイル。
+# 通常は os.replace で消えるが、書き込み中にプロセスが落ちると residue が残る。
+state/agents.json.*.tmp
+
 # 実際の利用で生成された成果物（テンプレートには含めない）
 lp/
 

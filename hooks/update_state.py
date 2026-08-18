@@ -3,7 +3,6 @@
 サブエージェントが並行実行されると、このスクリプトが同時に複数プロセスで動く
 （例: coder/testerが同時にツールを使う）。そのため read-modify-write を
 ファイルロックで直列化し、一時ファイル名もプロセスごとに一意にしている。"""
-import fcntl
 import json
 import os
 import sys
@@ -12,6 +11,11 @@ from datetime import datetime
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_PATH = os.path.join(BASE_DIR, "state", "agents.json")
 LOCK_PATH = STATE_PATH + ".lock"
+
+# フックはリポジトリ外の作業ディレクトリから起動されうるため、
+# 共有ヘルパーを import できるようリポジトリルートを明示的に通す。
+sys.path.insert(0, BASE_DIR)
+from statefile import load_state, state_lock, write_state  # noqa: E402
 
 AGENT_REGISTRY = {
     "P": {"name": "発田案", "dept": "企画部", "role": "PM"},
@@ -84,42 +88,29 @@ def main():
     if state is None:
         return
 
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    with state_lock(LOCK_PATH):
+        store = load_state(STATE_PATH)
 
-    with open(LOCK_PATH, "w") as lock_f:
-        fcntl.flock(lock_f, fcntl.LOCK_EX)
-        try:
-            try:
-                with open(STATE_PATH, "r", encoding="utf-8") as f:
-                    store = json.load(f)
-            except Exception:
-                store = {"agents": {}}
+        agents = store.setdefault("agents", {})
+        now = datetime.now()
+        agent = agents.setdefault(AGENT_ID, {**AGENT_META, "log": []})
+        agent.update(AGENT_META)
+        agent["state"] = state
+        agent["detail"] = detail
+        agent["updated_at"] = now.timestamp()
 
-            agents = store.setdefault("agents", {})
-            now = datetime.now()
-            agent = agents.setdefault(AGENT_ID, {**AGENT_META, "log": []})
-            agent.update(AGENT_META)
-            agent["state"] = state
-            agent["detail"] = detail
-            agent["updated_at"] = now.timestamp()
+        active = agent.setdefault("active_subagents", [])
+        if event == "SubagentStart":
+            active.append({"id": data.get("agent_id", ""), "type": data.get("agent_type", "agent")})
+        elif event == "SubagentStop":
+            stopped_id = data.get("agent_id", "")
+            agent["active_subagents"] = [a for a in active if a.get("id") != stopped_id]
 
-            active = agent.setdefault("active_subagents", [])
-            if event == "SubagentStart":
-                active.append({"id": data.get("agent_id", ""), "type": data.get("agent_type", "agent")})
-            elif event == "SubagentStop":
-                stopped_id = data.get("agent_id", "")
-                agent["active_subagents"] = [a for a in active if a.get("id") != stopped_id]
+        log = agent.setdefault("log", [])
+        log.append({"time": now.strftime("%H:%M:%S"), "state": state, "detail": detail})
+        del log[:-MAX_LOG]
 
-            log = agent.setdefault("log", [])
-            log.append({"time": now.strftime("%H:%M:%S"), "state": state, "detail": detail})
-            del log[:-MAX_LOG]
-
-            tmp_path = f"{STATE_PATH}.{os.getpid()}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(store, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, STATE_PATH)
-        finally:
-            fcntl.flock(lock_f, fcntl.LOCK_UN)
+        write_state(STATE_PATH, store)
 
 
 if __name__ == "__main__":

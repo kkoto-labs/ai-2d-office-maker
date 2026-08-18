@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/Users/kotokaito/_work/AI見える化/hooks/update_state.py\""
+            "command": "python \"${CLAUDE_PROJECT_DIR}/hooks/update_state.py\""
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/Users/kotokaito/_work/AI見える化/hooks/update_state.py\""
+            "command": "python \"${CLAUDE_PROJECT_DIR}/hooks/update_state.py\""
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/Users/kotokaito/_work/AI見える化/hooks/update_state.py\""
+            "command": "python \"${CLAUDE_PROJECT_DIR}/hooks/update_state.py\""
           }
         ]
       }
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/Users/kotokaito/_work/AI見える化/hooks/update_state.py\""
+            "command": "python \"${CLAUDE_PROJECT_DIR}/hooks/update_state.py\""
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/Users/kotokaito/_work/AI見える化/hooks/update_state.py\""
+            "command": "python \"${CLAUDE_PROJECT_DIR}/hooks/update_state.py\""
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/Users/kotokaito/_work/AI見える化/hooks/update_state.py\""
+            "command": "python \"${CLAUDE_PROJECT_DIR}/hooks/update_state.py\""
           }
         ]
       }
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"/Users/kotokaito/_work/AI見える化/hooks/update_state.py\""
+            "command": "python \"${CLAUDE_PROJECT_DIR}/hooks/update_state.py\""
           }
         ]
       }

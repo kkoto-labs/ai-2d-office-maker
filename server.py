@@ -3,16 +3,18 @@
 localhost専用（他マシンからはアクセスできません）。
 エージェントごとに state/sessions/<AGENT_ID>.txt へセッションIDを記録し、
 それを --resume することで、同じキャラへの指示が過去の会話を引き継ぐ。"""
-import fcntl
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+from statefile import load_state, state_lock, write_state
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_PATH = os.path.join(BASE_DIR, "state", "agents.json")
@@ -52,23 +54,11 @@ def system_prompt_for(agent_id):
 
 
 def patch_state(agent_id, **fields):
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(LOCK_PATH, "w") as lock_f:
-        fcntl.flock(lock_f, fcntl.LOCK_EX)
-        try:
-            try:
-                with open(STATE_PATH, "r", encoding="utf-8") as f:
-                    store = json.load(f)
-            except Exception:
-                store = {"agents": {}}
-            agent = store.setdefault("agents", {}).setdefault(agent_id, {})
-            agent.update(fields)
-            tmp_path = f"{STATE_PATH}.{os.getpid()}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(store, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, STATE_PATH)
-        finally:
-            fcntl.flock(lock_f, fcntl.LOCK_UN)
+    with state_lock(LOCK_PATH):
+        store = load_state(STATE_PATH)
+        agent = store.setdefault("agents", {}).setdefault(agent_id, {})
+        agent.update(fields)
+        write_state(STATE_PATH, store)
 
 
 def set_queue_len(agent_id, delta):
@@ -76,6 +66,21 @@ def set_queue_len(agent_id, delta):
         n = queue_len_by_agent.get(agent_id, 0) + delta
         queue_len_by_agent[agent_id] = n
     patch_state(agent_id, queue_len=n)
+
+
+def claude_bin():
+    """claude 実行ファイルのフルパスを返す。
+
+    Windows では claude の実体が claude.CMD なので、subprocess に文字列
+    "claude" をそのまま渡すと CreateProcess が PATHEXT を見ずに解決へ失敗する。
+    PATHEXT を考慮する shutil.which で解決してから渡す必要がある。
+    """
+    path = shutil.which("claude")
+    if not path:
+        raise FileNotFoundError(
+            "claude コマンドが見つかりません。Claude Code CLI をインストールし、"
+            "PATH が通っているか確認してください。")
+    return path
 
 
 def run_instruction(agent_id, instruction):
@@ -87,11 +92,11 @@ def run_instruction(agent_id, instruction):
     if os.path.exists(sess_path):
         with open(sess_path, encoding="utf-8") as f:
             session_id = f.read().strip()
-        cmd = ["claude", "-p", instruction, "--permission-mode", "auto",
+        cmd = [claude_bin(), "-p", instruction, "--permission-mode", "auto",
                "--resume", session_id, "--output-format", "text"]
     else:
         session_id = str(uuid.uuid4())
-        cmd = ["claude", "-p", instruction, "--permission-mode", "auto",
+        cmd = [claude_bin(), "-p", instruction, "--permission-mode", "auto",
                "--session-id", session_id, "--output-format", "text"]
 
     prompt = system_prompt_for(agent_id)
@@ -167,8 +172,21 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
 
-def watch_self_and_reload(httpd, interval=1.0):
-    """server.py自身が編集されたら、ポートを解放して自分自身を再起動する。
+class OfficeServer(ThreadingHTTPServer):
+    # Windows の SO_REUSEADDR は、既に LISTEN 中のポートへの二重バインドまで
+    # 許してしまう。二重起動に気づけないまま2つのサーバーがリクエストを
+    # 取り合うより、その場で "address already in use" で失敗させたい。
+    allow_reuse_address = os.name != "nt"
+
+
+# 子プロセスが「server.pyが更新されたので起動し直してほしい」と
+# 親に伝えるための終了コード。
+RESTART_EXIT_CODE = 97
+CHILD_ENV_FLAG = "AI_MIERUKA_CHILD"
+
+
+def watch_self_and_exit(httpd, interval=1.0):
+    """server.py自身が編集されたら、ポートを解放して再起動要求コードで終了する。
     手動でkill/restartしなくても、次のブラウザからの指示から新しいコードが
     使われるようにするため。"""
     path = os.path.abspath(__file__)
@@ -180,14 +198,47 @@ def watch_self_and_reload(httpd, interval=1.0):
         except FileNotFoundError:
             continue
         if mtime != last_mtime:
-            print("[reload] server.py が更新されたため再起動します...", flush=True)
             httpd.server_close()
-            os.execv(sys.executable, [sys.executable, "-u", path])
+            # デーモンスレッドからなので sys.exit ではプロセスが終わらない。
+            os._exit(RESTART_EXIT_CODE)
+
+
+def supervise():
+    """サーバー本体を子プロセスとして動かし、再起動要求が来たら起動し直す親。
+
+    以前は os.execv で自分自身を置き換えていたが、Windows の os.execv は
+    プロセスを置き換えず「別プロセスを起こして自分は終了する」ため、
+    起動元のターミナルがサーバーを見失い、Ctrl+Cの効かない孤児プロセスが
+    ポートを掴んだまま残ってしまう。親を常駐させる方式なら、どちらのOSでも
+    ターミナルがサーバーを掴んだままにできる。
+    """
+    env = dict(os.environ, **{CHILD_ENV_FLAG: "1"})
+    child_cmd = [sys.executable]
+    if sys.flags.utf8_mode:
+        # 親のUTF-8モードは子に自動では伝わらない。引き継がないと、実際に
+        # 画面へ出力するのは子なので、日本語だけコンソール既定のコード
+        # ページ(日本語WindowsならCP932)で出てしまい文字化けする。
+        child_cmd += ["-X", "utf8"]
+    child_cmd += ["-u", os.path.abspath(__file__)]
+    while True:
+        try:
+            code = subprocess.run(child_cmd, env=env).returncode
+        except KeyboardInterrupt:
+            return 0
+        if code != RESTART_EXIT_CODE:
+            return code
+        print("[reload] server.py が更新されたため再起動します...", flush=True)
 
 
 if __name__ == "__main__":
+    if os.environ.get(CHILD_ENV_FLAG) != "1":
+        sys.exit(supervise())
+
     threading.Thread(target=worker_loop, daemon=True).start()
-    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    threading.Thread(target=watch_self_and_reload, args=(httpd,), daemon=True).start()
+    httpd = OfficeServer(("127.0.0.1", PORT), Handler)
+    threading.Thread(target=watch_self_and_exit, args=(httpd,), daemon=True).start()
     print(f"AI見える化オフィス: http://localhost:{PORT}/viewer/", flush=True)
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass

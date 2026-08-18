@@ -38,12 +38,24 @@ Claude Codeのエージェント活動を、2Dドット絵の「社員」とし�
 
 ## 使い方
 
+Windows:
+
+```bash
+start_viewer.bat
+```
+
+macOS / Linux:
+
 ```bash
 ./start_viewer.sh
 ```
 
 表示されるURL（`http://localhost:8420/viewer/`）をブラウザで開いてください。
 指示ボックスから、宛先を選んで指示を送れます。
+
+macOS / Linuxで使う場合は、`.claude/settings.json`のフックコマンドを
+`python`から`python3`に書き換えてください（Windowsの`python3`は
+Microsoft Storeのスタブに奪われていることが多いため、既定は`python`にしています）。
 
 `server.py`は自分自身のファイルが更新されると自動的に再起動します（`state/`や
 `souls/`・`prompts/`の変更は元々リクエストごとに読み直すので再起動不要です）。
@@ -76,7 +88,11 @@ state/agents.json  ◀───────────────────�
   `AI_MIERUKA_AGENT`でどのキャラのフックかを判別しています。
 - `server.py`: ブラウザからの指示を受け取り、該当キャラのセッション（`state/sessions/`）
   を`claude -p --resume`で継続実行するローカルサーバーです。同じキャラへの指示は
-  セッションIDを介して過去の会話を引き継ぎます。
+  セッションIDを介して過去の会話を引き継ぎます。自分自身を子プロセスとして起動する
+  親子構成になっていて、`server.py`が編集されたら子だけを作り直します。
+- `statefile.py`: `state/agents.json`へのロックとアトミック書き込みを担う共有ヘルパーです。
+  `server.py`とフックが同じファイルを書くため、排他制御をここに集約しています
+  （Unixは`fcntl`、Windowsは`msvcrt`とAPIが違うので、その差もここで吸収します）。
 - `viewer/`: `state/agents.json`をポーリングして2Dキャラを描画する静的ページです。
 
 ## カスタマイズ方法
