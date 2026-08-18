@@ -17,13 +17,24 @@
   <main class="floor">
     <div class="rooms" id="rooms"></div>
 
-    <aside class="activity-log">
+    <aside class="side-panels">
+      <section class="lobby" id="lobby" hidden>
+        <div class="lobby-head">
+          <h2>ロビー（管理外のセッション）</h2>
+          <span class="lobby-count"></span>
+        </div>
+        <div class="lobby-list"></div>
+        <p class="lobby-note">このオフィスの外で動いている claude です。指示は出せません。</p>
+      </section>
+
+      <section class="activity-log">
       <div class="log-header">
         <h2>活動ログ</h2>
         <button type="button" id="log-toggle" class="log-toggle" aria-expanded="false">▼ すべて表示</button>
       </div>
       <div class="log-latest" id="log-latest"></div>
-      <ul id="log-list" class="log-full"></ul>
+        <ul id="log-list" class="log-full"></ul>
+      </section>
     </aside>
   </main>
 

@@ -520,6 +520,86 @@ body {
 .log-full li .log-dept { color: #7fa8d9; flex-shrink: 0; }
 .log-full li .log-detail { color: #dbe2ec; word-break: break-word; flex-basis: 100%; }
 
+/* ---- ロビー（管理外のセッション） --------------------------------------- */
+
+.side-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 0 0 300px;
+  min-width: 0;
+}
+
+.lobby {
+  background: #171d27;
+  border: 1px solid #2c3543;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.lobby[hidden] { display: none; }
+.lobby-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.lobby-head h2 {
+  font-size: 13px;
+  margin: 0;
+  color: #9fb3d1;
+}
+.lobby-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: #8b93a3;
+  background: #232b38;
+  border-radius: 10px;
+  padding: 2px 9px;
+}
+.lobby-list { display: flex; flex-direction: column; gap: 8px; }
+
+.guest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #141a23;
+  border: 1px solid #2c3543;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.guest-sprite {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  background-repeat: no-repeat;
+  background-size: 300% 400%;
+  background-position: 50% 0;
+  image-rendering: pixelated;
+}
+.guest.working .guest-sprite { animation: idle-bob 1.6s infinite ease-in-out; }
+.guest.thinking .guest-sprite { animation: idle-bob 3s infinite ease-in-out; }
+.guest-text { display: flex; flex-direction: column; min-width: 0; }
+.guest-name {
+  font-size: 12px;
+  color: #eef1f5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.guest-detail {
+  font-size: 11px;
+  color: #8b93a3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lobby-note {
+  font-size: 11px;
+  color: #6c7686;
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
 /* ---- 設定画面 ---------------------------------------------------------- */
 
 .topbar {

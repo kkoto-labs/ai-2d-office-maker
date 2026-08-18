@@ -21,6 +21,7 @@ let office = null;
 
 const lastRenderedLogKey = {};
 const lastRenderedSubagentKey = {};
+const lastRenderedGuestKey = {};
 // プロジェクトごとに、最後に描いた回答の時刻を覚える。
 const lastRenderedReportAt = {};
 
@@ -197,6 +198,7 @@ async function poll() {
     const res = await fetch(`../state/agents.json?t=${Date.now()}`, { cache: "no-store" });
     const data = await res.json();
     render(data.agents || {});
+    renderGuests(data.guests || {});
   } catch (e) {
     // state file not available yet; keep last rendered view
   } finally {
@@ -234,6 +236,51 @@ function render(agentsData) {
   mergedLog.sort((a, b) => (a.time > b.time ? 1 : a.time < b.time ? -1 : 0));
   renderLog(mergedLog);
   for (const [key, report] of latestByProject) renderReport(key, report);
+}
+
+// このオフィスの管理外で動いている claude。設定に無いので配席もできず、
+// 指示も出せない。ロビーに立ち寄っている人として、別枠で見せる。
+const GUEST_SPRITES = [
+  "pipo-charachip011.png", "pipo-charachip012.png", "pipo-charachip013.png",
+  "pipo-charachip014.png", "pipo-charachip019.png", "pipo-charachip022.png",
+];
+
+function guestSprite(sessionId) {
+  // 同じセッションには毎回同じ見た目を割り当てたいので、IDから決める。
+  let hash = 0;
+  for (const ch of sessionId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return GUEST_SPRITES[hash % GUEST_SPRITES.length];
+}
+
+function renderGuests(guests) {
+  const lobby = document.getElementById("lobby");
+  const entries = Object.values(guests);
+  lobby.hidden = entries.length === 0;
+  if (!entries.length) {
+    lastRenderedGuestKey.key = "";
+    return;
+  }
+
+  // 中身が変わったときだけ描き直す。毎秒作り直すとアニメーションが途切れる。
+  const key = entries.map((g) => `${g.session}:${g.state}:${g.detail}`).sort().join("|");
+  if (lastRenderedGuestKey.key === key) return;
+  lastRenderedGuestKey.key = key;
+
+  lobby.querySelector(".lobby-count").textContent = `${entries.length}人`;
+  const list = lobby.querySelector(".lobby-list");
+  list.innerHTML = "";
+  for (const guest of entries) {
+    const el = document.createElement("div");
+    el.className = `guest ${guest.state}`;
+    el.innerHTML = `
+      <div class="guest-sprite" style="background-image: url('assets/characters/${guestSprite(guest.session)}')"></div>
+      <div class="guest-text">
+        <span class="guest-name">${escapeHtml(guest.project)}</span>
+        <span class="guest-detail">${escapeHtml(STATE_LABEL[guest.state] || guest.state)}・${escapeHtml(guest.detail)}</span>
+      </div>`;
+    el.title = `${guest.cwd}\nセッション ${guest.short}`;
+    list.appendChild(el);
+  }
 }
 
 function renderAgent(agent, data) {

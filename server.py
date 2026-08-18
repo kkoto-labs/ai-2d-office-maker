@@ -15,6 +15,7 @@ import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import officeconfig
+import sessionscan
 from statefile import load_state, state_lock, write_state
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -325,6 +326,44 @@ def run_instruction(agent_id, instruction):
     patch_state(agent_id, last_report=report, last_report_at=time.time())
 
 
+def managed_sessions():
+    """このオフィスが動かしているセッションIDの一覧。"""
+    ids = set()
+    try:
+        names = os.listdir(SESSION_DIR)
+    except OSError:
+        return ids
+    for name in names:
+        if not name.endswith(".txt"):
+            continue
+        try:
+            with open(os.path.join(SESSION_DIR, name), encoding="utf-8") as f:
+                ids.add(f.read().strip())
+        except OSError:
+            continue
+    return ids
+
+
+def guest_loop(interval=2.0):
+    """管理外のClaude Codeセッションを見張って、来客として記録し続ける。
+
+    フックはこのオフィスが起動したセッションしか知らせてくれない。手元の
+    ターミナルで開いた claude は、どこにも映らないまま裏で動くことになる。
+    """
+    while True:
+        try:
+            guests = sessionscan.scan(exclude_sessions=managed_sessions())
+            with state_lock(LOCK_PATH):
+                store = load_state(STATE_PATH)
+                if store.get("guests") != guests:
+                    store["guests"] = guests
+                    write_state(STATE_PATH, store)
+        except Exception:
+            # 見張りが落ちてもオフィス本体は動き続けてほしい。
+            pass
+        time.sleep(interval)
+
+
 def worker_loop():
     while True:
         agent_id, instruction = task_queue.get()
@@ -596,6 +635,7 @@ if __name__ == "__main__":
     install_local_hooks()
     officeconfig.ensure_config()
     threading.Thread(target=worker_loop, daemon=True).start()
+    threading.Thread(target=guest_loop, daemon=True).start()
     httpd = OfficeServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=watch_self_and_exit, args=(httpd,), daemon=True).start()
     print(f"AI見える化オフィス: http://localhost:{PORT}/viewer/", flush=True)
