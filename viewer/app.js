@@ -3,6 +3,9 @@ const STALE_MS = 90 * 1000;
 const REPORT_DECAY_MS = 4000;
 const PROJECTS_KEY = "__projects__";
 const SUBAGENTS_KEY = "__subagents__";
+const CHART_KEY = "__chart__";
+const DEPTS_KEY = "__departments__";
+const NEW_DEPT_VALUE = "__new_dept__";
 
 const STATE_LABEL = {
   idle: "待機中",
@@ -12,6 +15,53 @@ const STATE_LABEL = {
 };
 
 const SUBAGENT_SPRITE_DEFAULT = "pipo-charachip001b.png";
+// どの部署にも属していない部下の置き場所（officeconfig.py と揃える）。
+const UNASSIGNED_DEPT = "未所属";
+
+// サブエージェントに渡せるツール。frontmatter には英語名で書く決まりなので、
+// 保存する値は name のまま、画面には日本語の説明だけを出す。
+const TOOL_CATALOG = [
+  {
+    group: "ファイルを読む・書く",
+    tools: [
+      { name: "Read", label: "ファイルを読む", desc: "ソースコードや文書の中身を見る" },
+      { name: "Edit", label: "ファイルを編集する", desc: "既存ファイルの一部を書き換える" },
+      { name: "Write", label: "ファイルを作る", desc: "新規作成、または丸ごと上書きする" },
+      { name: "NotebookEdit", label: "ノートブックを編集する", desc: "Jupyter (.ipynb) のセルを書き換える" },
+    ],
+  },
+  {
+    group: "探す",
+    tools: [
+      { name: "Glob", label: "ファイルを名前で探す", desc: "「*.py」のようなパターンで一覧する" },
+      { name: "Grep", label: "中身を検索する", desc: "コードや文書の中を単語・正規表現で探す" },
+    ],
+  },
+  {
+    group: "実行する",
+    tools: [
+      { name: "Bash", label: "コマンドを実行する", desc: "テスト実行やgit操作など。強力なので付与は慎重に" },
+      { name: "PowerShell", label: "PowerShellを実行する", desc: "Windows向けのコマンド実行" },
+    ],
+  },
+  {
+    group: "外部を調べる",
+    tools: [
+      { name: "WebSearch", label: "Webを検索する", desc: "調べ物をする" },
+      { name: "WebFetch", label: "Webページを読む", desc: "URLを指定して中身を読む" },
+    ],
+  },
+  {
+    group: "その他",
+    tools: [
+      { name: "TodoWrite", label: "作業リストを管理する", desc: "自分の手順を整理しながら進める" },
+      { name: "Agent", label: "さらに部下を呼ぶ", desc: "この部下が、もう一段下のエージェントを起動できる" },
+      { name: "Skill", label: "スキルを使う", desc: "登録済みのスキル(定型作業の手順書)を呼び出す" },
+    ],
+  },
+];
+
+const KNOWN_TOOLS = new Set(TOOL_CATALOG.flatMap((g) => g.tools.map((t) => t.name)));
 
 // オフィスの構成は config/office.json が真実源で、サーバーの /api/office 経由で
 // 受け取る。以前はこのファイルにキャラ定義をベタ書きしていたため、設定を変える
@@ -26,6 +76,8 @@ let draftSubagents = [];
 let deletedSubagentFiles = [];
 let selectedKey = null;
 let selectedSubagent = 0;
+// 畳んだ部署だけを覚える。新しくできた部署は開いた状態で出したいため。
+const collapsedDepts = new Set();
 
 const lastRenderedLogKey = {};
 const lastRenderedSubagentKey = {};
@@ -54,12 +106,40 @@ function buildRooms() {
   targetSelect.innerHTML = "";
   for (const key of Object.keys(lastRenderedSubagentKey)) delete lastRenderedSubagentKey[key];
 
+  // 同じ部署のメンバーは1つの部屋に並べる。部署は設定画面で自由に増やせるので、
+  // 部屋の数はエージェント数ではなく部署数で決まる。
+  const byDept = new Map();
   for (const agent of AGENTS) {
+    if (!byDept.has(agent.dept)) byDept.set(agent.dept, []);
+    byDept.get(agent.dept).push(agent);
+  }
+
+  for (const [dept, members] of byDept) {
     const room = document.createElement("section");
     room.className = "room";
-    room.dataset.dept = agent.dept;
-    room.innerHTML = `
-      <div class="room-label">${escapeHtml(agent.dept)}</div>
+    room.dataset.dept = dept;
+    room.innerHTML = `<div class="room-label">${escapeHtml(dept)}</div>`
+      + members.map(deskUnitHtml).join("");
+    roomsEl.appendChild(room);
+
+    for (const agent of members) {
+      document.getElementById(`sprite-${agent.id}`).style.backgroundImage =
+        `url("assets/characters/${agent.sprite}")`;
+
+      const opt = document.createElement("option");
+      opt.value = agent.id;
+      opt.textContent = `${dept} - ${agent.name}`;
+      targetSelect.appendChild(opt);
+    }
+  }
+
+  if (AGENTS.some((a) => a.id === previousTarget)) targetSelect.value = previousTarget;
+  document.getElementById("topbar-sub").textContent = [...byDept.keys()].join("・");
+}
+
+function deskUnitHtml(agent) {
+  return `
+    <div class="desk-unit" data-agent="${escapeHtml(agent.id)}">
       <div class="desk">
         <div class="monitor"><div class="monitor-screen"></div></div>
         <div class="character" id="char-${agent.id}">
@@ -78,20 +158,7 @@ function buildRooms() {
         <span class="status-text">読み込み中...</span>
       </div>
       <div class="subagents" id="subagents-${agent.id}"></div>
-    `;
-    roomsEl.appendChild(room);
-    document.getElementById(`sprite-${agent.id}`).style.backgroundImage =
-      `url("assets/characters/${agent.sprite}")`;
-
-    const opt = document.createElement("option");
-    opt.value = agent.id;
-    opt.textContent = `${agent.dept} - ${agent.name}`;
-    targetSelect.appendChild(opt);
-  }
-
-  if (AGENTS.some((a) => a.id === previousTarget)) targetSelect.value = previousTarget;
-  document.getElementById("topbar-sub").textContent =
-    AGENTS.map((a) => a.dept).join("・");
+    </div>`;
 }
 
 async function poll() {
@@ -282,10 +349,14 @@ function openSettings() {
   // 変わってしまわないようにするため。
   draft = JSON.parse(JSON.stringify(office.config));
   draftSouls = { ...office.souls };
-  draftSubagents = office.subagent_catalog.map((s) => ({
-    ...s,
-    sprite: draft.subagent_sprites[s.name] || SUBAGENT_SPRITE_DEFAULT,
-  }));
+  draftSubagents = office.subagent_catalog.map((s) => {
+    const meta = draft.subagents[s.name] || {};
+    return {
+      ...s,
+      sprite: meta.sprite || SUBAGENT_SPRITE_DEFAULT,
+      dept: meta.dept || UNASSIGNED_DEPT,
+    };
+  });
   deletedSubagentFiles = [];
   selectedSubagent = 0;
   selectedKey = draft.agents.length ? draft.agents[0].id : PROJECTS_KEY;
@@ -315,37 +386,138 @@ function renderSettingsNav() {
   const list = document.getElementById("settings-nav-list");
   list.innerHTML = "";
 
+  list.appendChild(navSection("エージェント"));
+
+  // 人数が増えるほど一覧が縦に伸びるので、部署ごとに畳めるようにする。
+  const byDept = new Map();
   for (const agent of draft.agents) {
-    const li = document.createElement("li");
-    li.className = `nav-item${agent.id === selectedKey ? " active" : ""}`;
-    li.innerHTML = `
-      <div class="nav-sprite" style="background-image: url('assets/characters/${agent.sprite}')"></div>
-      <div class="nav-text">
-        <span class="nav-name" data-nav-name="${escapeHtml(agent.id)}">${escapeHtml(agent.name)}</span>
-        <span class="nav-dept" data-nav-dept="${escapeHtml(agent.id)}">${escapeHtml(agent.dept)}</span>
-      </div>
-    `;
-    li.addEventListener("click", () => {
-      selectedKey = agent.id;
-      renderSettings();
-    });
-    list.appendChild(li);
+    if (!byDept.has(agent.dept)) byDept.set(agent.dept, []);
+    byDept.get(agent.dept).push(agent);
   }
 
-  for (const [key, label, sub] of [
-    [SUBAGENTS_KEY, "👥 サブエージェント", "部下の追加・編集"],
+  for (const [dept, members] of byDept) {
+    list.appendChild(navGroup(dept, dept, members.length,
+      (body) => members.forEach((a) => body.appendChild(agentNavItem(a)))));
+  }
+
+  list.appendChild(navAddButton("＋ エージェントを追加", addAgent));
+
+  // 部下も同じ見た目・同じ部署単位で並べる。役割が違うだけで、
+  // どの部署の戦力なのかという見方は上司と変わらないため。
+  list.appendChild(navSection("サブエージェント"));
+  const subsByDept = new Map();
+  draftSubagents.forEach((sub, i) => {
+    const dept = sub.dept || UNASSIGNED_DEPT;
+    if (!subsByDept.has(dept)) subsByDept.set(dept, []);
+    subsByDept.get(dept).push({ sub, i });
+  });
+  for (const [dept, entries] of subsByDept) {
+    list.appendChild(navGroup(`sub:${dept}`, dept, entries.length,
+      (body) => entries.forEach(({ sub, i }) => body.appendChild(subagentNavItem(sub, i)))));
+  }
+  if (!draftSubagents.length) {
+    const empty = document.createElement("li");
+    empty.className = "nav-empty";
+    empty.textContent = "まだいません";
+    list.appendChild(empty);
+  }
+  list.appendChild(navAddButton("＋ サブエージェントを追加", addSubagent));
+
+  list.appendChild(navSection("設定"));
+  for (const [key, label, caption] of [
+    [CHART_KEY, "🗺 組織図", "関係性を図で確認する"],
+    [DEPTS_KEY, "🏢 部署", "部署の新設と上下関係"],
     [PROJECTS_KEY, "📁 プロジェクト", "作業ディレクトリの管理"],
   ]) {
     const li = document.createElement("li");
     li.className = `nav-item nav-meta${selectedKey === key ? " active" : ""}`;
     li.innerHTML = `<div class="nav-text"><span class="nav-name">${label}</span>
-      <span class="nav-dept">${sub}</span></div>`;
+      <span class="nav-dept">${caption}</span></div>`;
     li.addEventListener("click", () => {
       selectedKey = key;
       renderSettings();
     });
     list.appendChild(li);
   }
+}
+
+function navGroup(stateKey, label, count, fillBody) {
+  // stateKey は開閉の記憶用。エージェントと部下で同じ部署名が出るので、
+  // 別々に畳めるよう呼び出し側で接頭辞を付けて渡す。
+  const collapsed = collapsedDepts.has(stateKey);
+  const group = document.createElement("li");
+  group.className = "nav-group";
+  group.innerHTML = `
+    <button type="button" class="nav-group-head${collapsed ? " collapsed" : ""}"
+      aria-expanded="${!collapsed}">
+      <span class="nav-caret">▾</span>
+      <span class="nav-group-name">${escapeHtml(label)}</span>
+      <span class="nav-group-count">${count}</span>
+    </button>
+    <ul class="nav-group-body"${collapsed ? " hidden" : ""}></ul>`;
+
+  group.querySelector(".nav-group-head").addEventListener("click", () => {
+    if (collapsed) collapsedDepts.delete(stateKey);
+    else collapsedDepts.add(stateKey);
+    renderSettingsNav();
+  });
+  fillBody(group.querySelector(".nav-group-body"));
+  return group;
+}
+
+function navSection(label) {
+  const li = document.createElement("li");
+  li.className = "nav-section";
+  li.textContent = label;
+  return li;
+}
+
+function navAddButton(label, handler) {
+  const li = document.createElement("li");
+  li.innerHTML = `<button type="button" class="nav-add">${escapeHtml(label)}</button>`;
+  li.querySelector("button").addEventListener("click", handler);
+  return li;
+}
+
+function subagentNavItem(sub, index) {
+  const active = selectedKey === SUBAGENTS_KEY && selectedSubagent === index;
+  // 2行目は「誰の部下か」。エージェント側の役職欄と同じ位置づけにする。
+  const bosses = draft.agents.filter((a) => a.subagents.includes(sub.name));
+  const caption = bosses.length ? bosses.map((b) => b.name).join("・") : "未配属";
+
+  const li = document.createElement("li");
+  li.className = `nav-item${active ? " active" : ""}`;
+  li.innerHTML = `
+    <div class="nav-sprite" style="background-image: url('assets/characters/${sub.sprite}')"></div>
+    <div class="nav-text">
+      <span class="nav-name" data-nav-sub="${index}">${escapeHtml(sub.name)}</span>
+      <span class="nav-dept">${escapeHtml(caption)}</span>
+    </div>
+  `;
+  li.addEventListener("click", () => {
+    selectedKey = SUBAGENTS_KEY;
+    selectedSubagent = index;
+    renderSettings();
+  });
+  return li;
+}
+
+function agentNavItem(agent) {
+  const li = document.createElement("li");
+  li.className = `nav-item${agent.id === selectedKey ? " active" : ""}`;
+  // 部署名はグループの見出しに出ているので、ここは役職を出す。
+  li.innerHTML = `
+    <div class="nav-sprite" style="background-image: url('assets/characters/${agent.sprite}')"></div>
+    <div class="nav-text">
+      <span class="nav-name" data-nav-name="${escapeHtml(agent.id)}">${escapeHtml(agent.name)}</span>
+      <span class="nav-dept" data-nav-role="${escapeHtml(agent.id)}">${escapeHtml(agent.role)}</span>
+    </div>
+  `;
+  li.addEventListener("click", () => {
+    selectedKey = agent.id;
+    renderSettings();
+  });
+  return li;
 }
 
 function renderSettingsEditor() {
@@ -356,6 +528,14 @@ function renderSettingsEditor() {
   }
   if (selectedKey === SUBAGENTS_KEY) {
     renderSubagentEditor(el);
+    return;
+  }
+  if (selectedKey === CHART_KEY) {
+    renderOrgChart(el);
+    return;
+  }
+  if (selectedKey === DEPTS_KEY) {
+    renderDepartmentsEditor(el);
     return;
   }
   const agent = draft.agents.find((a) => a.id === selectedKey);
@@ -381,15 +561,7 @@ function renderAgentEditor(el, agent) {
     </label>`)
     .join("") || '<p class="hint">他に登録されたプロジェクトがありません。</p>';
 
-  // 候補は保存前の下書きから引く。追加したばかりの部下も、保存を待たずに
-  // ここへ割り当てられるようにするため。
-  const subagentChoices = draftSubagents
-    .map((s) => `<label class="check-row">
-      <input type="checkbox" data-subagent="${escapeHtml(s.name)}"${agent.subagents.includes(s.name) ? " checked" : ""} />
-      <span class="check-name">${escapeHtml(s.name)}</span>
-      <span class="check-desc">${escapeHtml(s.description)}</span>
-    </label>`)
-    .join("") || '<p class="hint">サブエージェントがまだいません。左の「👥 サブエージェント」から追加できます。</p>';
+  const subagentChoices = subagentChoicesHtml(agent);
 
   const consultChoices = draft.agents
     .filter((a) => a.id !== agent.id)
@@ -407,7 +579,9 @@ function renderAgentEditor(el, agent) {
         <label class="field"><span>名前</span>
           <input type="text" data-field="name" value="${escapeHtml(agent.name)}" maxlength="40" /></label>
         <label class="field"><span>部署</span>
-          <input type="text" data-field="dept" value="${escapeHtml(agent.dept)}" maxlength="40" /></label>
+          ${deptSelectHtml(agent.dept, "data-agent-dept")}
+          <small class="hint">同じ部署の人は同じ部屋に並びます。
+          部署の上下関係は「🏢 部署」で設定します。</small></label>
         <label class="field"><span>役職</span>
           <input type="text" data-field="role" value="${escapeHtml(agent.role)}" maxlength="40" /></label>
         <label class="field"><span>内部ID</span>
@@ -456,18 +630,95 @@ function renderAgentEditor(el, agent) {
   wireAgentEditor(el, agent);
 }
 
+function subagentChoicesHtml(agent) {
+  if (!draftSubagents.length) {
+    return '<p class="hint">サブエージェントがまだいません。左の「サブエージェント」から追加できます。</p>';
+  }
+
+  // 候補は保存前の下書きから引く。追加したばかりの部下も、保存を待たずに
+  // ここへ割り当てられるようにするため。
+  const byDept = new Map();
+  for (const sub of draftSubagents) {
+    const dept = sub.dept || UNASSIGNED_DEPT;
+    if (!byDept.has(dept)) byDept.set(dept, []);
+    byDept.get(dept).push(sub);
+  }
+
+  // 自分の部署を先頭に。他部署は畳んでおき、必要なときだけ開いて借りる。
+  const own = agent.dept;
+  const order = [...byDept.keys()].sort((a, b) =>
+    (a === own ? -1 : 0) - (b === own ? -1 : 0));
+
+  return order.map((dept) => {
+    const rows = byDept.get(dept).map((s) => `
+      <label class="check-row">
+        <input type="checkbox" data-subagent="${escapeHtml(s.name)}"${agent.subagents.includes(s.name) ? " checked" : ""} />
+        <span class="check-name">${escapeHtml(s.name)}</span>
+        <span class="check-desc">${escapeHtml(s.description)}</span>
+      </label>`).join("");
+
+    const isOwn = dept === own;
+    const assigned = byDept.get(dept).filter((s) => agent.subagents.includes(s.name)).length;
+    // 他部署でも、すでに借りている相手がいるなら開いて見せる。
+    const open = isOwn || assigned > 0;
+    return `<details class="dept-fold"${open ? " open" : ""}>
+      <summary>${escapeHtml(dept)}
+        <span class="dept-fold-count">${byDept.get(dept).length}</span>
+        ${isOwn ? '<span class="dept-fold-tag">自部署</span>'
+                : (assigned ? `<span class="dept-fold-tag borrow">他部署から${assigned}人</span>` : "")}
+      </summary>
+      <div class="check-list">${rows}</div>
+    </details>`;
+  }).join("");
+}
+
+/** 部署の選択欄。
+ *
+ *  以前は datalist を使っていたが、datalist は入力済みの文字で候補を絞る仕様で、
+ *  すでに部署が入っていると他の部署が一覧に出てこなかった。常に全部見えるよう
+ *  select にしている。
+ */
+function deptSelectHtml(current, attr) {
+  const names = deptNames();
+  if (current && !names.includes(current)) names.push(current);
+  return `<select ${attr}>
+    ${names.map((d) => `<option value="${escapeHtml(d)}"${
+      d === current ? " selected" : ""}>${escapeHtml(d)}</option>`).join("")}
+    <option value="${NEW_DEPT_VALUE}">＋ 新しい部署をつくる…</option>
+  </select>`;
+}
+
+/** 部署の選択欄に「新しい部署」用の入口を持たせる。 */
+function wireDeptSelect(select, apply) {
+  select.addEventListener("change", () => {
+    if (select.value !== NEW_DEPT_VALUE) {
+      apply(select.value);
+      return;
+    }
+    const name = (window.prompt("新しい部署の名前") || "").trim();
+    if (!name) { renderSettingsEditor(); return; }
+    if (!draft.departments[name]) draft.departments[name] = { parent: null };
+    apply(name);
+  });
+}
+
 function wireAgentEditor(el, agent) {
   for (const input of el.querySelectorAll("[data-field]")) {
     input.addEventListener("input", () => {
       agent[input.dataset.field] = input.value;
-      // 名前と部署は左のリストにも出ている。編集中にフォーム全体を組み直すと
+      // 名前と役職は左のリストにも出ている。編集中にリスト全体を組み直すと
       // 入力欄からフォーカスが外れてしまうので、該当箇所だけ書き換える。
       const navName = document.querySelector(`[data-nav-name="${agent.id}"]`);
-      const navDept = document.querySelector(`[data-nav-dept="${agent.id}"]`);
+      const navRole = document.querySelector(`[data-nav-role="${agent.id}"]`);
       if (navName) navName.textContent = agent.name;
-      if (navDept) navDept.textContent = agent.dept;
+      if (navRole) navRole.textContent = agent.role;
     });
   }
+
+  wireDeptSelect(el.querySelector("[data-agent-dept]"), (dept) => {
+    agent.dept = dept;
+    renderSettings();
+  });
 
   wireSpritePreview(el, agent.sprite, (sprite) => {
     agent.sprite = sprite;
@@ -512,6 +763,422 @@ function toggleIn(list, value, on) {
   const next = list.filter((v) => v !== value);
   if (on) next.push(value);
   return next;
+}
+
+// ---- 部署 -----------------------------------------------------------------
+
+function deptNames() {
+  return Object.keys(draft.departments);
+}
+
+function deptMembers(name) {
+  return [
+    ...draft.agents.filter((a) => a.dept === name).map((a) => a.name),
+    ...draftSubagents.filter((s) => s.dept === name).map((s) => s.name),
+  ];
+}
+
+/** 部署をたどって根までの深さ。循環していても止まるようにする。 */
+function deptDepth(name) {
+  let depth = 0;
+  const seen = new Set();
+  let cursor = (draft.departments[name] || {}).parent;
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    depth += 1;
+    cursor = (draft.departments[cursor] || {}).parent;
+  }
+  return depth;
+}
+
+/** 自分の子孫は親に選べない。選ぶと循環するため。 */
+function deptDescendants(name) {
+  const out = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [child, meta] of Object.entries(draft.departments)) {
+      if (out.has(child)) continue;
+      if (meta.parent === name || out.has(meta.parent)) {
+        out.add(child);
+        changed = true;
+      }
+    }
+  }
+  return out;
+}
+
+/** 階層の深さを示す目印。
+ *
+ *  以前は行そのものを深さ分だけ字下げしていたが、それだと社長直属の行と
+ *  配下の行で入力欄の左端と幅が揃わなかった。目印は固定幅の枠に閉じ込め、
+ *  その中だけで字下げする。
+ */
+function deptDepthMark(depth) {
+  if (depth <= 0) return '<span class="dept-depth"></span>';
+  const indent = Math.min(depth - 1, 2) * 7;
+  return `<span class="dept-depth" style="padding-left:${indent}px">└</span>`;
+}
+
+function renderDepartmentsEditor(el) {
+  const rows = deptNames().map((name) => {
+    const banned = deptDescendants(name);
+    const options = ['<option value="">（社長直属）</option>']
+      .concat(deptNames()
+        .filter((other) => other !== name && !banned.has(other))
+        .map((other) => `<option value="${escapeHtml(other)}"${
+          draft.departments[name].parent === other ? " selected" : ""
+        }>${escapeHtml(other)}</option>`))
+      .join("");
+
+    const members = deptMembers(name);
+    return `
+      <div class="dept-row" data-dept-row="${escapeHtml(name)}">
+        <div class="dept-row-main">
+          ${deptDepthMark(deptDepth(name))}
+          <label class="field"><span>部署名</span>
+            <input type="text" data-dept-name value="${escapeHtml(name)}" maxlength="40" /></label>
+          <label class="field"><span>どこの下につくか</span>
+            <select data-dept-parent>${options}</select></label>
+          <button type="button" class="btn-danger btn-small" data-dept-delete>削除</button>
+        </div>
+        <div class="dept-row-members">${members.length
+          ? `所属 ${members.length}人: ${escapeHtml(members.join("、"))}`
+          : "所属なし"}</div>
+      </div>`;
+  }).join("");
+
+  el.innerHTML = `
+    <section class="edit-section">
+      <h3>部署</h3>
+      <p class="hint">「どこの下につくか」で、社長直属か、別の部署の下かを決めます。
+      組織図の段はこの設定で決まります。自分の下にある部署は、循環するので親に選べません。</p>
+      <div class="dept-list">${rows || '<p class="hint">部署がありません。</p>'}</div>
+      <button type="button" class="btn-ghost" id="dept-add">＋ 部署を追加</button>
+    </section>`;
+
+  for (const row of el.querySelectorAll("[data-dept-row]")) {
+    const name = row.dataset.deptRow;
+
+    row.querySelector("[data-dept-parent]").addEventListener("change", (e) => {
+      draft.departments[name].parent = e.target.value || null;
+      renderSettingsEditor();
+    });
+
+    // 改名は所属している全員に波及させる。取り残すと所属先が消えてしまう。
+    row.querySelector("[data-dept-name]").addEventListener("change", (e) => {
+      const next = e.target.value.trim();
+      if (!next || next === name) { renderSettingsEditor(); return; }
+      if (draft.departments[next]) {
+        setSettingsStatus(`「${next}」はすでにあります。`, true);
+        renderSettingsEditor();
+        return;
+      }
+      renameDept(name, next);
+      setSettingsStatus("");
+      renderSettings();
+    });
+
+    row.querySelector("[data-dept-delete]").addEventListener("click", () => {
+      const members = deptMembers(name);
+      if (members.length) {
+        setSettingsStatus(`「${name}」には ${members.join("、")} が所属しています。`, true);
+        return;
+      }
+      // 下にぶら下がっていた部署は、消える親の代わりに一段上へ引き上げる。
+      const parent = draft.departments[name].parent;
+      for (const meta of Object.values(draft.departments)) {
+        if (meta.parent === name) meta.parent = parent;
+      }
+      delete draft.departments[name];
+      setSettingsStatus("");
+      renderSettings();
+    });
+  }
+
+  el.querySelector("#dept-add").addEventListener("click", () => {
+    let n = 1;
+    while (draft.departments[`新しい部署${n}`]) n += 1;
+    draft.departments[`新しい部署${n}`] = { parent: null };
+    setSettingsStatus("");
+    renderSettings();
+  });
+}
+
+function renameDept(from, to) {
+  const next = {};
+  for (const [name, meta] of Object.entries(draft.departments)) {
+    next[name === from ? to : name] = {
+      parent: meta.parent === from ? to : meta.parent,
+    };
+  }
+  draft.departments = next;
+  for (const agent of draft.agents) if (agent.dept === from) agent.dept = to;
+  for (const sub of draftSubagents) if (sub.dept === from) sub.dept = to;
+}
+
+// ---- 組織図 ---------------------------------------------------------------
+
+const CHART = { w: 128, h: 74, gapX: 16, gapY: 58, pad: 16 };
+// 組織図で選んでいるノード。図の横のパネルはこれを見て中身を変える。
+let chartSelection = null;
+
+/** 「誰が誰に相談できるか」から、各エージェントの段を決める。
+ *  相談される側は相談する側の下に置く＝上位ほど上、という並びになる。 */
+function agentDepth() {
+  // 出発点は部署の階層。そのうえで、相談関係が下向きになるよう押し下げる。
+  const depth = new Map(draft.agents.map((a) => [a.id, deptDepth(a.dept)]));
+  // 相談関係は入れ子になりうるので、変化がなくなるまで押し下げる。
+  // 設定次第で循環しうるため、回数で必ず止める。
+  for (let pass = 0; pass < draft.agents.length; pass++) {
+    let moved = false;
+    for (const agent of draft.agents) {
+      for (const target of agent.consults) {
+        if (!depth.has(target)) continue;
+        const want = depth.get(agent.id) + 1;
+        if (depth.get(target) < want) {
+          depth.set(target, want);
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  return depth;
+}
+
+function buildOrgRows() {
+  const depth = agentDepth();
+  const rows = [];
+  const put = (level, node) => {
+    while (rows.length <= level) rows.push([]);
+    rows[level].push(node);
+  };
+
+  put(0, { id: "__boss__", kind: "boss", name: "社長", caption: "あなた", sprite: null });
+
+  for (const agent of draft.agents) {
+    put(depth.get(agent.id) + 1, {
+      id: agent.id, kind: "agent", name: agent.name,
+      caption: `${agent.dept}・${agent.role}`, sprite: agent.sprite,
+    });
+  }
+
+  // 部下は、その部下を使う上司の1つ下に置く。複数の上司がいるなら一番下に合わせる。
+  const bossLevel = new Map();
+  for (const agent of draft.agents) {
+    for (const name of agent.subagents) {
+      const level = depth.get(agent.id) + 1;
+      bossLevel.set(name, Math.max(bossLevel.get(name) ?? -1, level));
+    }
+  }
+  const unassigned = [];
+  for (const sub of draftSubagents) {
+    const node = { id: `sub:${sub.name}`, kind: "sub", name: sub.name,
+                   caption: sub.dept, sprite: sub.sprite };
+    if (bossLevel.has(sub.name)) put(bossLevel.get(sub.name) + 1, node);
+    else unassigned.push(node);
+  }
+  return { rows, unassigned };
+}
+
+function renderOrgChart(el) {
+  const { rows, unassigned } = buildOrgRows();
+  const rowWidth = (n) => n * CHART.w + (n - 1) * CHART.gapX;
+  const widest = Math.max(...rows.map((r) => rowWidth(r.length)), 1);
+
+  // 位置を先に決めてから、箱と線の両方をその座標で描く。
+  const pos = new Map();
+  rows.forEach((row, level) => {
+    const left = CHART.pad + (widest - rowWidth(row.length)) / 2;
+    row.forEach((node, i) => {
+      pos.set(node.id, { x: left + i * (CHART.w + CHART.gapX),
+                         y: CHART.pad + level * (CHART.h + CHART.gapY), node });
+    });
+  });
+
+  const edges = [];
+  const topAgents = rows[1] || [];
+  for (const node of topAgents) edges.push(["__boss__", node.id, "lead"]);
+  for (const agent of draft.agents) {
+    for (const target of agent.consults) {
+      if (pos.has(target)) edges.push([agent.id, target, "lead"]);
+    }
+    for (const name of agent.subagents) {
+      if (pos.has(`sub:${name}`)) edges.push([agent.id, `sub:${name}`, "sub"]);
+    }
+  }
+
+  const totalW = widest + CHART.pad * 2;
+  const totalH = CHART.pad * 2 + rows.length * CHART.h + (rows.length - 1) * CHART.gapY;
+
+  // 選んだノードにつながる線だけを強調して、関係を追いやすくする。
+  const paths = edges.map(([from, to, kind]) => {
+    const a = pos.get(from), b = pos.get(to);
+    if (!a || !b) return "";
+    const x1 = a.x + CHART.w / 2, y1 = a.y + CHART.h;
+    const x2 = b.x + CHART.w / 2, y2 = b.y;
+    const mid = y1 + (y2 - y1) / 2;
+    const lit = chartSelection && (from === chartSelection || to === chartSelection);
+    const dim = chartSelection && !lit;
+    return `<path class="org-edge ${kind}${lit ? " lit" : ""}${dim ? " dim" : ""}"
+      d="M${x1} ${y1} V${mid} H${x2} V${y2}" />`;
+  }).join("");
+
+  const boxes = [...pos.values()].map(({ x, y, node }) => `
+    <div class="org-node ${node.kind}${node.id === chartSelection ? " selected" : ""}"
+         style="left:${x}px; top:${y}px; width:${CHART.w}px; height:${CHART.h}px"
+         data-node="${escapeHtml(node.id)}">
+      ${node.sprite ? `<div class="org-sprite" style="background-image:url('assets/characters/${escapeHtml(node.sprite)}')"></div>`
+                    : '<div class="org-sprite org-crown">👑</div>'}
+      <div class="org-name">${escapeHtml(node.name)}</div>
+      <div class="org-caption">${escapeHtml(node.caption)}</div>
+    </div>`).join("");
+
+  const strays = unassigned.length ? `
+    <div class="org-strays">
+      <h4>どの上司にも割り当てられていない部下</h4>
+      <div class="chip-row">${unassigned.map((n) => `
+        <span class="chip" data-node="${escapeHtml(n.id)}">
+          <span class="chip-sprite" style="background-image:url('assets/characters/${escapeHtml(n.sprite)}')"></span>
+          ${escapeHtml(n.name)}
+        </span>`).join("")}</div>
+    </div>` : "";
+
+  // 描き直しでスクロール位置が戻ると、図の同じ場所を見失う。
+  const keepScroll = el.querySelector(".org-scroll");
+  const scroll = keepScroll ? { x: keepScroll.scrollLeft, y: keepScroll.scrollTop } : null;
+
+  el.innerHTML = `
+    <section class="edit-section">
+      <h3>組織図</h3>
+      <p class="hint">上にいるほど上位です。ノードを選ぶと、右の欄で関係性をその場で変更できます。</p>
+      <div class="org-legend">
+        <span><i class="org-key lead"></i>指示・相談できる</span>
+        <span><i class="org-key sub"></i>部下として呼べる</span>
+      </div>
+      <div class="org-layout">
+        <div class="org-scroll">
+          <div class="org-chart" style="width:${totalW}px; height:${totalH}px">
+            <svg width="${totalW}" height="${totalH}">${paths}</svg>
+            ${boxes}
+          </div>
+        </div>
+        <aside class="org-panel">${orgPanelHtml(pos)}</aside>
+      </div>
+      ${strays}
+    </section>`;
+
+  const scroller = el.querySelector(".org-scroll");
+  if (scroll) { scroller.scrollLeft = scroll.x; scroller.scrollTop = scroll.y; }
+
+  for (const box of el.querySelectorAll(".org-node[data-node]")) {
+    const id = box.dataset.node;
+    if (id === "__boss__") continue;
+    box.classList.add("clickable");
+    box.addEventListener("click", () => {
+      chartSelection = chartSelection === id ? null : id;
+      renderSettingsEditor();
+    });
+  }
+
+  wireOrgPanel(el);
+}
+
+function orgPanelHtml(pos) {
+  if (!chartSelection || !pos.has(chartSelection)) {
+    return `<p class="hint">図のノードを選ぶと、ここで部下や相談先を付け外しできます。</p>`;
+  }
+  const { node } = pos.get(chartSelection);
+
+  if (node.kind === "sub") {
+    const rows = draft.agents.map((a) => `
+      <label class="check-row compact">
+        <input type="checkbox" data-org-boss="${escapeHtml(a.id)}"${
+          a.subagents.includes(node.name) ? " checked" : ""} />
+        <span class="check-name">${escapeHtml(a.name)}</span>
+      </label>`).join("");
+    return `${orgPanelHead(node)}
+      <h4>この部下を呼べる上司</h4>
+      <div class="check-list">${rows}</div>`;
+  }
+
+  const agent = draft.agents.find((a) => a.id === node.id);
+  if (!agent) return orgPanelHead(node);
+
+  const subs = draftSubagents.map((s) => `
+    <label class="check-row compact">
+      <input type="checkbox" data-org-sub="${escapeHtml(s.name)}"${
+        agent.subagents.includes(s.name) ? " checked" : ""} />
+      <span class="check-name">${escapeHtml(s.name)}</span>
+      <span class="check-desc">${escapeHtml(s.dept)}</span>
+    </label>`).join("") || '<p class="hint">部下がいません。</p>';
+
+  const peers = draft.agents.filter((a) => a.id !== agent.id).map((a) => `
+    <label class="check-row compact">
+      <input type="checkbox" data-org-consult="${escapeHtml(a.id)}"${
+        agent.consults.includes(a.id) ? " checked" : ""} />
+      <span class="check-name">${escapeHtml(a.name)}</span>
+      <span class="check-desc">${escapeHtml(a.dept)}</span>
+    </label>`).join("") || '<p class="hint">他にエージェントがいません。</p>';
+
+  return `${orgPanelHead(node)}
+    <h4>部下として呼べる</h4>
+    <div class="check-list">${subs}</div>
+    <h4>指示・相談できる相手</h4>
+    <div class="check-list">${peers}</div>`;
+}
+
+function orgPanelHead(node) {
+  return `
+    <div class="org-panel-head">
+      <div class="nav-sprite" style="background-image:url('assets/characters/${escapeHtml(node.sprite)}')"></div>
+      <div class="nav-text">
+        <span class="nav-name">${escapeHtml(node.name)}</span>
+        <span class="nav-dept">${escapeHtml(node.caption)}</span>
+      </div>
+    </div>
+    <button type="button" class="btn-ghost btn-small" data-org-open>設定を開く</button>`;
+}
+
+function wireOrgPanel(el) {
+  const id = chartSelection;
+  if (!id) return;
+  const agent = draft.agents.find((a) => a.id === id);
+  const subName = id.startsWith("sub:") ? id.slice(4) : null;
+
+  for (const box of el.querySelectorAll("[data-org-sub]")) {
+    box.addEventListener("change", () => {
+      agent.subagents = toggleIn(agent.subagents, box.dataset.orgSub, box.checked);
+      renderSettingsEditor();
+    });
+  }
+  for (const box of el.querySelectorAll("[data-org-consult]")) {
+    box.addEventListener("change", () => {
+      agent.consults = toggleIn(agent.consults, box.dataset.orgConsult, box.checked);
+      renderSettingsEditor();
+    });
+  }
+  for (const box of el.querySelectorAll("[data-org-boss]")) {
+    box.addEventListener("change", () => {
+      const boss = draft.agents.find((a) => a.id === box.dataset.orgBoss);
+      boss.subagents = toggleIn(boss.subagents, subName, box.checked);
+      renderSettingsEditor();
+    });
+  }
+
+  const open = el.querySelector("[data-org-open]");
+  if (open) {
+    open.addEventListener("click", () => {
+      if (subName) {
+        selectedSubagent = draftSubagents.findIndex((s) => s.name === subName);
+        selectedKey = SUBAGENTS_KEY;
+      } else {
+        selectedKey = id;
+      }
+      renderSettings();
+    });
+  }
 }
 
 // ---- キャラクター画像ピッカー（候補が多いので別モーダルに出す） -------------
@@ -559,43 +1226,32 @@ function renderSubagentEditor(el) {
   if (!draftSubagents.length) {
     el.innerHTML = `<section class="edit-section">
       <h3>サブエージェント</h3>
-      <p class="hint">まだ部下がいません。</p>
-      <button type="button" class="btn-ghost" id="subagent-add">＋ サブエージェントを追加</button>
+      <p class="hint">まだ部下がいません。左の「＋ サブエージェントを追加」から作成できます。</p>
     </section>`;
-    el.querySelector("#subagent-add").addEventListener("click", addSubagent);
     return;
   }
 
   selectedSubagent = Math.min(selectedSubagent, draftSubagents.length - 1);
   const sub = draftSubagents[selectedSubagent];
 
-  const chips = draftSubagents.map((s, i) => `
-    <button type="button" class="chip${i === selectedSubagent ? " active" : ""}" data-subagent-index="${i}">
-      <span class="chip-sprite" style="background-image: url('assets/characters/${escapeHtml(s.sprite)}')"></span>
-      ${escapeHtml(s.name)}
-    </button>`).join("");
-
   el.innerHTML = `
     <section class="edit-section">
-      <h3>サブエージェント</h3>
-      <div class="chip-row">${chips}
-        <button type="button" class="chip chip-add" id="subagent-add">＋ 追加</button>
-      </div>
       <p class="hint">実体は <code>.claude/agents/*.md</code>（Claude Code標準のサブエージェント定義）です。</p>
-    </section>
-
-    <section class="edit-section">
       <div class="field-grid">
         <label class="field"><span>名前</span>
           <input type="text" data-sub-field="name" value="${escapeHtml(sub.name)}" maxlength="40" /></label>
-        <label class="field"><span>使えるツール</span>
-          <input type="text" data-sub-field="tools" value="${escapeHtml(sub.tools)}"
-            placeholder="Read, Grep, Glob, Edit, Write, Bash" />
-          <small class="hint">空にすると全ツールを継承します。</small></label>
+        <label class="field"><span>部署</span>
+          ${deptSelectHtml(sub.dept, "data-sub-dept")}
+          <small class="hint">同じ部署の上司には、この部下が最初から開いた状態で出ます。</small></label>
       </div>
       <label class="field"><span>説明（どんなときに呼ぶか）</span>
         <textarea class="soul-input" data-sub-field="description" rows="3"
           placeholder="この部下をいつ使うべきかを書きます。上司がこの文章を見て呼び出しを判断します。">${escapeHtml(sub.description)}</textarea></label>
+    </section>
+
+    <section class="edit-section">
+      <h3>できること（ツール）</h3>
+      ${toolChecklistHtml(sub)}
     </section>
 
     <section class="edit-section">
@@ -614,13 +1270,6 @@ function renderSubagentEditor(el) {
     </section>
   `;
 
-  for (const button of el.querySelectorAll("[data-subagent-index]")) {
-    button.addEventListener("click", () => {
-      selectedSubagent = Number(button.dataset.subagentIndex);
-      renderSettingsEditor();
-    });
-  }
-  el.querySelector("#subagent-add").addEventListener("click", addSubagent);
   el.querySelector("#subagent-delete").addEventListener("click", () => deleteSubagent(sub));
 
   for (const input of el.querySelectorAll("[data-sub-field]")) {
@@ -628,18 +1277,69 @@ function renderSubagentEditor(el) {
       const field = input.dataset.subField;
       if (field === "name") {
         renameSubagent(sub, input.value);
-        const chip = el.querySelector(`[data-subagent-index="${selectedSubagent}"]`);
-        if (chip) chip.lastChild.textContent = ` ${input.value}`;
+        // 左のリストにも名前が出ている。組み直すとフォーカスを失うので直接書き換える。
+        const label = document.querySelector(`[data-nav-sub="${selectedSubagent}"]`);
+        if (label) label.textContent = input.value;
         return;
       }
       sub[field] = input.value;
     });
   }
 
+  wireDeptSelect(el.querySelector("[data-sub-dept]"), (dept) => {
+    sub.dept = dept;
+    renderSettings();
+  });
+
+  for (const box of el.querySelectorAll("[data-tool]")) {
+    box.addEventListener("change", () => {
+      const selected = new Set(toolList(sub));
+      if (box.checked) selected.add(box.dataset.tool);
+      else selected.delete(box.dataset.tool);
+      sub.tools = [...selected].join(", ");
+      // 「全部選択なし＝全ツール」の注意書きを出し入れするため、
+      // 0件との境目をまたいだときだけ描き直す。
+      const crossedZero = selected.size === 0 || selected.size === 1;
+      if (crossedZero) renderSettingsEditor();
+    });
+  }
+
   wireSpritePreview(el, sub.sprite, (sprite) => {
     sub.sprite = sprite;
-    renderSettingsEditor();
+    renderSettings();
   });
+}
+
+function toolList(sub) {
+  return String(sub.tools || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function toolChecklistHtml(sub) {
+  const selected = new Set(toolList(sub));
+  // カタログに無いもの（MCPツールなど）は、こちらで扱えなくても消さずに預かる。
+  const extras = [...selected].filter((t) => !KNOWN_TOOLS.has(t));
+
+  const groups = TOOL_CATALOG.map((g) => `
+    <h4>${escapeHtml(g.group)}</h4>
+    <div class="check-list">${g.tools.map((t) => `
+      <label class="check-row">
+        <input type="checkbox" data-tool="${escapeHtml(t.name)}"${selected.has(t.name) ? " checked" : ""} />
+        <span class="check-name">${escapeHtml(t.label)}</span>
+        <span class="check-desc">${escapeHtml(t.desc)}</span>
+      </label>`).join("")}</div>`).join("");
+
+  const extraNote = extras.length
+    ? `<p class="hint">この一覧に無い設定も預かっています（保存時にそのまま残します）:
+       <code>${escapeHtml(extras.join(", "))}</code></p>`
+    : "";
+
+  // 「1つも選ばない＝全部使える」は直感に反するので、その状態のときだけ強く出す。
+  const inheritNote = selected.size === 0
+    ? `<p class="warn">1つも選んでいないので、この部下は<strong>すべてのツールを使えます</strong>。
+       絞りたい場合は必要なものにチェックを入れてください。</p>`
+    : "";
+
+  return inheritNote + groups + extraNote;
 }
 
 function renameSubagent(sub, nextName) {
@@ -663,10 +1363,13 @@ function addSubagent() {
     tools: "",
     body: "## 人格\n\n\n## 仕事\n",
     sprite: office.sprites[0] || SUBAGENT_SPRITE_DEFAULT,
+    // いま見ているエージェントの部署に入れておく。多くの場合その上司の部下として作るため。
+    dept: (draft.agents.find((a) => a.id === selectedKey) || {}).dept || UNASSIGNED_DEPT,
   });
+  selectedKey = SUBAGENTS_KEY;
   selectedSubagent = draftSubagents.length - 1;
   setSettingsStatus("");
-  renderSettingsEditor();
+  renderSettings();
 }
 
 function deleteSubagent(sub) {
@@ -679,7 +1382,7 @@ function deleteSubagent(sub) {
   }
   selectedSubagent = 0;
   setSettingsStatus("");
-  renderSettingsEditor();
+  renderSettings();
 }
 
 function renderProjectsEditor(el) {
@@ -719,7 +1422,7 @@ function renderProjectsEditor(el) {
       browseForDirectory(e.currentTarget, row.querySelector('[data-project-field="path"]'), key);
     });
     row.querySelector("[data-project-delete]").addEventListener("click", () => {
-      const used = draft.agents.filter((a) => a.project === key);
+      const used = draft.agents.filter((a) => (a.projects || []).includes(key));
       if (used.length) {
         setSettingsStatus(
           `「${draft.projects[key].name}」は ${used.map((a) => a.name).join("・")} が使用中です。`, true);
@@ -800,7 +1503,7 @@ function addAgent() {
     sprite: office.sprites[0] || SUBAGENT_SPRITE_DEFAULT,
     // 空にしておくと、サーバー側が名前からファイル名を決めてくれる。
     soul: "",
-    project: Object.keys(draft.projects)[0],
+    projects: [Object.keys(draft.projects)[0]],
     consults: [],
     subagents: [],
   };
@@ -833,9 +1536,9 @@ async function saveSettings() {
   button.disabled = true;
   setSettingsStatus("保存中...");
 
-  // 部下の画像は名前をキーに持つので、改名にも追随するよう毎回組み直す。
-  draft.subagent_sprites = Object.fromEntries(
-    draftSubagents.map((s) => [s.name, s.sprite]));
+  // 部下の見た目と所属は名前をキーに持つので、改名にも追随するよう毎回組み直す。
+  draft.subagents = Object.fromEntries(draftSubagents.map((s) =>
+    [s.name, { sprite: s.sprite, dept: s.dept || UNASSIGNED_DEPT }]));
 
   try {
     const res = await fetch("/api/office", {
@@ -866,7 +1569,6 @@ function setupSettings() {
   document.getElementById("settings-close").addEventListener("click", closeSettings);
   document.getElementById("settings-cancel").addEventListener("click", closeSettings);
   document.getElementById("settings-save").addEventListener("click", saveSettings);
-  document.getElementById("agent-add").addEventListener("click", addAgent);
 
   document.getElementById("sprite-close").addEventListener("click", closeSpritePicker);
   document.getElementById("settings-modal").addEventListener("click", (e) => {

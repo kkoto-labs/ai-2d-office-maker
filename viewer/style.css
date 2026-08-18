@@ -140,13 +140,26 @@ body {
 
 .room {
   position: relative;
-  width: 300px;
-  min-height: 370px;
+  min-width: 300px;
   background: linear-gradient(180deg, #2a3342 0%, #24303f 60%, #3a4658 60%, #445068 100%);
   border: 2px solid #3d4a5c;
   border-radius: 10px;
-  padding: 20px;
+  /* 部署名の札が左上に浮いているので、その分だけ上を空ける。 */
+  padding: 38px 14px 14px;
   overflow: hidden;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* 1人分の席。同じ部署のメンバーはこれが横に並ぶ。
+   机・キャラ・状態・部下の位置は、この箱を基準にしている。 */
+.desk-unit {
+  position: relative;
+  width: 268px;
+  height: 322px;
+  flex: 0 0 auto;
 }
 
 .room-label {
@@ -163,7 +176,7 @@ body {
 
 .desk {
   position: absolute;
-  bottom: 130px;
+  bottom: 108px;
   left: 50%;
   transform: translateX(-50%);
   width: 170px;
@@ -341,8 +354,8 @@ body {
 
 .status-badge {
   position: absolute;
-  top: 10px;
-  right: 14px;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -364,7 +377,7 @@ body {
 
 .subagents {
   position: absolute;
-  bottom: 8px;
+  bottom: 0;
   left: 0;
   right: 0;
   display: flex;
@@ -578,6 +591,66 @@ body {
   padding: 10px;
 }
 .settings-nav ul { list-style: none; margin: 0; padding: 0; }
+
+.nav-section {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #6c7686;
+  text-transform: uppercase;
+  padding: 6px 8px 4px;
+  margin-top: 10px;
+  border-top: 1px solid #232b38;
+}
+.nav-section:first-child { margin-top: 0; border-top: none; }
+
+.nav-empty {
+  font-size: 11px;
+  color: #6c7686;
+  padding: 6px 12px;
+}
+
+.nav-group { margin-bottom: 2px; }
+.nav-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: #9fb3d1;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+  text-align: left;
+}
+.nav-group-head:hover { background: #1c2530; color: #cdd6e2; }
+.nav-caret {
+  font-size: 9px;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.nav-group-head.collapsed .nav-caret { transform: rotate(-90deg); }
+.nav-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-group-count {
+  flex-shrink: 0;
+  background: #232b38;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: #8b93a3;
+}
+.nav-group-body { padding-left: 10px; }
+.nav-group-body[hidden] { display: none; }
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -606,7 +679,7 @@ body {
 .nav-dept { font-size: 10px; color: #8b93a3; }
 .nav-add {
   width: 100%;
-  margin-top: 6px;
+  margin-top: 4px;
   background: #1a2029;
   border: 1px dashed #37435a;
   border-radius: 6px;
@@ -717,6 +790,200 @@ body {
 .check-desc {
   font-size: 10px;
   color: #6c7686;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 組織図 ------------------------------------------------------------ */
+
+.org-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 10px;
+  color: #8b93a3;
+  margin: 8px 0 10px;
+}
+.org-legend span { display: flex; align-items: center; gap: 6px; }
+.org-key { width: 18px; height: 0; border-top: 2px solid #4a7fb8; display: inline-block; }
+.org-key.sub { border-top-style: dashed; border-color: #6d7a8c; }
+
+.org-layout { display: flex; gap: 12px; align-items: flex-start; }
+
+.org-scroll {
+  flex: 1;
+  min-width: 0;
+  max-height: 460px;
+  overflow: auto;
+  border: 1px solid #2c3543;
+  border-radius: 8px;
+  background: #141a23;
+}
+
+.org-panel {
+  width: 210px;
+  flex-shrink: 0;
+  max-height: 460px;
+  overflow-y: auto;
+  background: #141a23;
+  border: 1px solid #2c3543;
+  border-radius: 8px;
+  padding: 12px;
+}
+.org-panel h4 { margin: 12px 0 6px; }
+.org-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.org-panel .btn-small { width: 100%; }
+.check-row.compact {
+  grid-template-columns: auto 1fr;
+  row-gap: 0;
+  padding: 6px 8px;
+}
+.check-row.compact .check-desc { grid-column: 2; font-size: 9px; }
+.org-chart { position: relative; }
+.org-chart svg { position: absolute; inset: 0; }
+
+.org-edge { fill: none; stroke: #4a7fb8; stroke-width: 1.5; }
+.org-edge.sub { stroke: #6d7a8c; stroke-dasharray: 4 3; }
+.org-edge.lit { stroke: #6ea8e8; stroke-width: 2.5; }
+.org-edge.sub.lit { stroke: #d9b382; }
+.org-edge.dim { opacity: 0.25; }
+
+.org-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  background: #1a2029;
+  border: 1px solid #2c3543;
+  border-radius: 8px;
+  padding: 4px;
+  text-align: center;
+}
+.org-node.clickable { cursor: pointer; }
+.org-node.clickable:hover { border-color: #4a7fb8; background: #202836; }
+.org-node.boss { background: #24344a; border-color: #3b6ea5; }
+.org-node.sub { background: #161c24; border-style: dashed; }
+.org-node.selected {
+  border-color: #6ea8e8;
+  background: #22314a;
+  box-shadow: 0 0 0 2px rgba(110, 168, 232, 0.35);
+}
+
+.org-sprite {
+  width: 30px;
+  height: 30px;
+  background-repeat: no-repeat;
+  background-size: 300% 400%;
+  background-position: 50% 0;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+}
+.org-crown {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+.org-name {
+  font-size: 11px;
+  color: #eef1f5;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.org-caption {
+  font-size: 9px;
+  color: #8b93a3;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-strays { margin-top: 14px; }
+.org-strays h4 { font-size: 11px; margin: 0 0 6px; color: #d9b382; }
+
+/* 関係性の「部下」を部署ごとに畳む折りたたみ */
+.dept-fold {
+  border: 1px solid #2c3543;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.dept-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #141a23;
+  font-size: 11px;
+  color: #cdd6e2;
+  cursor: pointer;
+  list-style: none;
+}
+.dept-fold > summary::-webkit-details-marker { display: none; }
+.dept-fold > summary::before {
+  content: "▾";
+  font-size: 9px;
+  color: #6c7686;
+  transition: transform 0.15s ease;
+}
+.dept-fold:not([open]) > summary::before { transform: rotate(-90deg); }
+.dept-fold > summary:hover { background: #1c2530; }
+.dept-fold-count {
+  background: #232b38;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: #8b93a3;
+}
+.dept-fold-tag {
+  margin-left: auto;
+  font-size: 10px;
+  color: #7fd0a2;
+  background: #1d2f26;
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+.dept-fold-tag.borrow { color: #d9b382; background: #2a2318; }
+.dept-fold .check-list { border: none; border-radius: 0; }
+
+/* ---- 部署設定 ---------------------------------------------------------- */
+
+.dept-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.dept-row {
+  background: #141a23;
+  border: 1px solid #2c3543;
+  border-radius: 6px;
+  padding: 10px;
+}
+.dept-row-main {
+  display: grid;
+  /* 1列目は階層の目印だけを入れる固定幅の枠。ここを固定しておかないと、
+     深さの違う行どうしで入力欄の左端が揃わなくなる。 */
+  grid-template-columns: 22px 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+.dept-depth {
+  font-size: 11px;
+  color: #6c7686;
+  line-height: 30px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.dept-row-members {
+  font-size: 10px;
+  color: #6c7686;
+  margin-top: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

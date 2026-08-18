@@ -26,6 +26,8 @@ ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
 PROJECT_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 MAX_NAME_LEN = 40
 MAX_SOUL_BYTES = 64 * 1024
+# どの部署にも属していない部下の置き場所。空文字だと画面上で見失うため。
+UNASSIGNED_DEPT = "未所属"
 
 
 class ConfigError(ValueError):
@@ -38,7 +40,62 @@ class ConfigError(ValueError):
 
 def load():
     with open(CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)
+        return _migrate(json.load(f))
+
+
+def _migrate(cfg):
+    """古い形の設定を、いまの読み手が期待する形に揃えてから渡す。
+
+    担当プロジェクトは project(単数・文字列)から projects(配列)へ移った。
+    読み込んだ時点で均しておかないと、サーバー・フック・ビューアがそれぞれ
+    別の形を想定することになり、存在しないフィールドを触って壊れる。
+    """
+    for agent in cfg.get("agents") or []:
+        if "projects" not in agent:
+            agent["projects"] = [agent["project"]] if agent.get("project") else []
+        agent.pop("project", None)
+
+    # 部下は画像だけを持つ subagent_sprites から、部署も持てる subagents へ移った。
+    # 移行時の所属は、その部下を実際に使っている上司の部署から引き継ぐ。
+    if "subagents" not in cfg and "subagent_sprites" in cfg:
+        owner = {}
+        for agent in cfg.get("agents") or []:
+            for name in agent.get("subagents") or []:
+                owner.setdefault(name, agent.get("dept", ""))
+        cfg["subagents"] = {
+            name: {"sprite": sprite, "dept": owner.get(name, UNASSIGNED_DEPT)}
+            for name, sprite in (cfg.get("subagent_sprites") or {}).items()
+        }
+    cfg.pop("subagent_sprites", None)
+    cfg.setdefault("subagents", {})
+
+    # 部署は「エージェントが持つ文字列」から、親子関係を持てる設定項目になった。
+    # 移行時の親は相談関係から起こす。ユイが各PMに相談できるなら、
+    # 秘書室の下に各部署がぶら下がっていた、と読むのが実態に近い。
+    if "departments" not in cfg:
+        by_id = {a["id"]: a for a in cfg.get("agents") or []}
+        parent = {}
+        for agent in cfg.get("agents") or []:
+            for target in agent.get("consults") or []:
+                child = by_id.get(target, {}).get("dept")
+                if child and child != agent.get("dept"):
+                    parent.setdefault(child, agent.get("dept"))
+        cfg["departments"] = {}
+        for name in _collect_dept_names(cfg):
+            cfg["departments"][name] = {"parent": parent.get(name)}
+    return cfg
+
+
+def _collect_dept_names(cfg):
+    """実際に使われている部署名を、登場順のまま重複なく集める。"""
+    names = []
+    for agent in cfg.get("agents") or []:
+        if agent.get("dept") and agent["dept"] not in names:
+            names.append(agent["dept"])
+    for meta in (cfg.get("subagents") or {}).values():
+        if meta.get("dept") and meta["dept"] not in names:
+            names.append(meta["dept"])
+    return names
 
 
 def agent_map(cfg):
@@ -265,11 +322,51 @@ def validate(cfg):
         agent["consults"] = [c for c in agent["consults"]
                              if c in valid_ids and c != agent["id"]]
 
-    return {
+    subagents = _validate_subagent_meta(cfg.get("subagents"), sprites, known_subagents)
+    result = {
+        "departments": {},
         "projects": projects,
         "agents": agents,
-        "subagent_sprites": _validate_sprite_map(cfg.get("subagent_sprites"), sprites),
+        "subagents": subagents,
     }
+    result["departments"] = _validate_departments(cfg.get("departments"), result)
+    return result
+
+
+def _validate_departments(raw, cfg):
+    """部署とその親子関係。使われている部署は必ず存在させる。
+
+    エージェントの所属先が部署一覧から抜けていると、設定画面で選べない
+    部署に取り残されてしまうため、実在する所属は自動で補う。
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    depts = {}
+    for name in _collect_dept_names(cfg):
+        entry = raw.get(name) if isinstance(raw.get(name), dict) else {}
+        depts[_clean_text(name, "部署名")] = {"parent": entry.get("parent")}
+
+    # 使われていない部署も、空のまま残しておけるようにする。
+    for name, entry in raw.items():
+        if name not in depts:
+            depts[_clean_text(name, "部署名")] = {
+                "parent": (entry or {}).get("parent")}
+
+    for name, entry in depts.items():
+        parent = entry.get("parent")
+        if parent not in depts or parent == name:
+            entry["parent"] = None
+
+    # 循環していると図が描けない。たどって自分に戻る枝は根に付け替える。
+    for name in depts:
+        seen = {name}
+        cursor = depts[name]["parent"]
+        while cursor:
+            if cursor in seen:
+                depts[name]["parent"] = None
+                break
+            seen.add(cursor)
+            cursor = depts[cursor]["parent"]
+    return depts
 
 
 def _validate_projects(raw):
@@ -349,10 +446,20 @@ def _validate_agent_projects(raw, projects, name):
     return cleaned
 
 
-def _validate_sprite_map(raw, sprites):
+def _validate_subagent_meta(raw, sprites, known_subagents):
+    """部下ごとの見た目と所属部署。定義ファイルが実在するものだけ残す。"""
     if not isinstance(raw, dict):
         return {}
-    return {str(k): v for k, v in raw.items() if v in sprites}
+    meta = {}
+    for name, value in raw.items():
+        if name not in known_subagents or not isinstance(value, dict):
+            continue
+        sprite = value.get("sprite")
+        meta[str(name)] = {
+            "sprite": sprite if sprite in sprites else "",
+            "dept": _clean_text(value.get("dept") or UNASSIGNED_DEPT, "部署名"),
+        }
+    return meta
 
 
 def _clean_text(value, label):

@@ -259,9 +259,22 @@ def worker_loop():
             task_queue.task_done()
 
 
+# ブラウザにキャッシュさせたくないビューアのファイル。画像は枚数が多いので
+# 対象外にして、コードと設定だけ毎回取り直させる。
+NO_CACHE_SUFFIXES = (".html", ".js", ".css", ".json")
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
+
+    def end_headers(self):
+        # viewer/ を直接編集しながら使うツールなので、ブラウザが古い app.js を
+        # 握っていると「直したはずの不具合がまだ出る」という追いにくい状態になる。
+        path = self.path.split("?")[0]
+        if path.endswith("/") or path.endswith(NO_CACHE_SUFFIXES):
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
 
     # ---- 共通のレスポンス -------------------------------------------------
 
@@ -438,19 +451,34 @@ RESTART_EXIT_CODE = 97
 CHILD_ENV_FLAG = "AI_MIERUKA_CHILD"
 
 
+def watched_sources():
+    """再起動の判断に使うファイル一式。
+
+    server.py だけを見ていた頃は、officeconfig.py を直しても起動中の
+    プロセスが古いモジュールを掴んだままで、「直したのに反映されない」
+    という分かりにくい状態になっていた。同じ階層のPythonはまとめて見る。
+    """
+    return sorted(os.path.join(BASE_DIR, f) for f in os.listdir(BASE_DIR)
+                  if f.endswith(".py"))
+
+
 def watch_self_and_exit(httpd, interval=1.0):
-    """server.py自身が編集されたら、ポートを解放して再起動要求コードで終了する。
+    """自分たちのソースが編集されたら、ポートを解放して再起動要求コードで終了する。
     手動でkill/restartしなくても、次のブラウザからの指示から新しいコードが
     使われるようにするため。"""
-    path = os.path.abspath(__file__)
-    last_mtime = os.path.getmtime(path)
+    def snapshot():
+        stamps = {}
+        for path in watched_sources():
+            try:
+                stamps[path] = os.path.getmtime(path)
+            except OSError:
+                continue
+        return stamps
+
+    last = snapshot()
     while True:
         time.sleep(interval)
-        try:
-            mtime = os.path.getmtime(path)
-        except FileNotFoundError:
-            continue
-        if mtime != last_mtime:
+        if snapshot() != last:
             httpd.server_close()
             # デーモンスレッドからなので sys.exit ではプロセスが終わらない。
             os._exit(RESTART_EXIT_CODE)
