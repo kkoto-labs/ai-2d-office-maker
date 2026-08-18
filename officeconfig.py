@@ -11,11 +11,14 @@
 import json
 import os
 import re
+import shutil
 
 from statefile import state_lock, write_state
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config", "office.json")
+# 配布する雛形。office.json は各自の設定なのでGitの追跡外にしてある。
+CONFIG_TEMPLATE_PATH = os.path.join(BASE_DIR, "config", "office.example.json")
 CONFIG_LOCK = CONFIG_PATH + ".lock"
 SOULS_DIR = os.path.join(BASE_DIR, "souls")
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
@@ -38,7 +41,16 @@ class ConfigError(ValueError):
 # 読み込み
 # --------------------------------------------------------------------------
 
+def ensure_config():
+    """初回起動時に、雛形から自分用の設定を起こす。"""
+    if os.path.exists(CONFIG_PATH) or not os.path.exists(CONFIG_TEMPLATE_PATH):
+        return
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    shutil.copyfile(CONFIG_TEMPLATE_PATH, CONFIG_PATH)
+
+
 def load():
+    ensure_config()
     with open(CONFIG_PATH, encoding="utf-8") as f:
         return _migrate(json.load(f))
 

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>設定 - AI見える化オフィス</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body class="settings-page">
+  <header class="topbar">
+    <div class="topbar-title">
+      <h1>設定</h1>
+      <div class="topbar-sub" id="settings-subtitle">読み込み中...</div>
+    </div>
+    <div class="topbar-actions">
+      <a class="topbar-button" href="index.html">← オフィスに戻る</a>
+    </div>
+  </header>
+
+  <main class="settings-main">
+    <nav class="settings-nav">
+      <ul id="settings-nav-list"></ul>
+    </nav>
+    <div class="settings-editor" id="settings-editor"></div>
+  </main>
+
+  <footer class="settings-foot">
+    <div class="settings-status" id="settings-status"></div>
+    <button type="button" class="btn-primary btn-save" id="settings-save">保存</button>
+  </footer>
+
+  <div class="modal-backdrop sprite-backdrop" id="sprite-modal" hidden>
+    <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="sprite-title">
+      <header class="modal-head">
+        <h2 id="sprite-title">キャラクター画像を選ぶ</h2>
+        <button type="button" class="modal-close" id="sprite-close" aria-label="閉じる">×</button>
+      </header>
+      <div class="sprite-grid" id="sprite-grid"></div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

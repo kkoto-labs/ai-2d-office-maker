@@ -15,24 +15,12 @@ body {
 .topbar h1 { margin: 0; font-size: 18px; }
 .topbar-sub { font-size: 12px; color: #8b93a3; margin-top: 2px; }
 
-.console-panel {
-  padding: 20px 24px;
-  background: #171d27;
-  border-bottom: 1px solid #2c3543;
-}
-
-.console-form-row {
+.project-console {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  max-width: 960px;
-}
-#instruct-form {
-  display: flex;
-  flex: 1;
   gap: 10px;
+  margin-bottom: 6px;
 }
-#instruct-target {
+.instruct-target {
   background: #1a2029;
   border: 1px solid #2c3543;
   border-radius: 6px;
@@ -41,7 +29,7 @@ body {
   padding: 0 10px;
   font-family: inherit;
 }
-#instruct-input {
+.instruct-input {
   flex: 1;
   resize: vertical;
   background: #1a2029;
@@ -52,7 +40,7 @@ body {
   padding: 10px 12px;
   font-family: inherit;
 }
-#instruct-form button {
+.project-console button {
   background: #3b6ea5;
   color: #fff;
   border: none;
@@ -62,32 +50,31 @@ body {
   cursor: pointer;
   align-self: stretch;
 }
-#instruct-form button:hover { background: #4a7fb8; }
-#instruct-form button:disabled { background: #465061; cursor: default; }
+.project-console button:hover { background: #4a7fb8; }
+.project-console button:disabled { background: #465061; cursor: default; }
 
 .instruct-status {
   font-size: 11px;
   color: #9fb3d1;
   min-height: 14px;
-  margin-top: 6px;
+  margin-bottom: 10px;
 }
 
 .console-reply {
-  max-width: 960px;
   margin-top: 14px;
   padding: 14px 16px;
   background: #12161d;
   border: 1px solid #2c3543;
   border-radius: 8px;
 }
-.console-reply h2 {
+.console-reply .reply-title {
   font-size: 12px;
   margin: 0 0 8px;
   color: #9fb3d1;
   text-transform: uppercase;
   letter-spacing: 1px;
 }
-#report-text {
+.reply-text {
   font-size: 14px;
   line-height: 1.7;
   color: #eef1f5;
@@ -95,26 +82,26 @@ body {
   max-height: 320px;
   overflow-y: auto;
 }
-#report-text p { margin: 0 0 10px; }
-#report-text p:last-child { margin-bottom: 0; }
-#report-text ol,
-#report-text ul {
+.reply-text p { margin: 0 0 10px; }
+.reply-text p:last-child { margin-bottom: 0; }
+.reply-text ol,
+.reply-text ul {
   margin: 0 0 10px;
   padding-left: 1.4em;
 }
-#report-text li { margin: 0 0 6px; }
-#report-text li:last-child { margin-bottom: 0; }
-#report-text h4,
-#report-text h5,
-#report-text h6 {
+.reply-text li { margin: 0 0 6px; }
+.reply-text li:last-child { margin-bottom: 0; }
+.reply-text h4,
+.reply-text h5,
+.reply-text h6 {
   margin: 14px 0 8px;
   color: #9fb3d1;
   font-size: 13px;
 }
-#report-text h4:first-child { margin-top: 0; }
-#report-text strong { color: #fff; font-weight: 700; }
-#report-text em { color: #cdd6e3; font-style: italic; }
-#report-text code {
+.reply-text h4:first-child { margin-top: 0; }
+.reply-text strong { color: #fff; font-weight: 700; }
+.reply-text em { color: #cdd6e3; font-style: italic; }
+.reply-text code {
   background: #1a2029;
   border: 1px solid #2c3543;
   border-radius: 4px;
@@ -133,9 +120,50 @@ body {
 
 .rooms {
   display: flex;
+  flex-direction: column;
+  gap: 22px;
+  flex: 1 1 auto;
+}
+
+/* 担当プロジェクトごとのフロア。部屋はこの中で横に並ぶ。 */
+.project-floor {
+  border: 1px solid #2c3543;
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(18, 22, 29, 0.5);
+}
+.project-floor:only-child {
+  border: none;
+  padding: 0;
+  background: none;
+}
+.project-floor-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #2c3543;
+}
+.project-floor-name { font-size: 13px; color: #eef1f5; }
+.project-floor-path {
+  font-size: 10px;
+  color: #6c7686;
+  font-family: "SF Mono", Menlo, monospace;
+}
+.project-floor-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: #8b93a3;
+  background: #232b38;
+  border-radius: 10px;
+  padding: 2px 9px;
+}
+
+.rooms-group {
+  display: flex;
   flex-wrap: wrap;
   gap: 20px;
-  flex: 1 1 auto;
 }
 
 .room {
@@ -582,13 +610,32 @@ body {
 .btn-danger:hover { background: #5a2d34; }
 .btn-small { padding: 6px 12px; align-self: end; }
 
+/* 設定は独立したページ。画面の高さいっぱいを使い、左の一覧と右の編集面が
+   それぞれ別にスクロールする。 */
+.settings-page { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.settings-main { flex: 1; display: flex; min-height: 0; }
+
+/* 保存は右下に固定する。編集面の一番下まで読んだ流れのまま押せる位置。 */
+.settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 12px 26px;
+  background: #12161d;
+  border-top: 1px solid #2c3543;
+}
+.btn-save { padding: 10px 32px; font-size: 13px; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+a.topbar-button { text-decoration: none; display: inline-block; }
+
 .settings-nav {
-  width: 240px;
+  width: 260px;
   flex-shrink: 0;
   border-right: 1px solid #2c3543;
   background: #141a23;
   overflow-y: auto;
-  padding: 10px;
+  padding: 12px;
 }
 .settings-nav ul { list-style: none; margin: 0; padding: 0; }
 
@@ -695,8 +742,9 @@ body {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 18px 20px;
+  padding: 22px 26px;
 }
+.settings-editor > .edit-section:last-child { margin-bottom: 40px; }
 .edit-section { margin-bottom: 22px; }
 .edit-section h3 {
   font-size: 11px;
@@ -813,7 +861,8 @@ body {
 .org-scroll {
   flex: 1;
   min-width: 0;
-  max-height: 460px;
+  max-height: calc(100vh - 260px);
+  min-height: 360px;
   overflow: auto;
   border: 1px solid #2c3543;
   border-radius: 8px;
@@ -821,9 +870,9 @@ body {
 }
 
 .org-panel {
-  width: 210px;
+  width: 240px;
   flex-shrink: 0;
-  max-height: 460px;
+  max-height: calc(100vh - 260px);
   overflow-y: auto;
   background: #141a23;
   border: 1px solid #2c3543;
@@ -877,8 +926,8 @@ body {
 }
 
 .org-sprite {
-  width: 30px;
-  height: 30px;
+  width: 38px;
+  height: 38px;
   background-repeat: no-repeat;
   background-size: 300% 400%;
   background-position: 50% 0;
@@ -892,7 +941,7 @@ body {
   font-size: 20px;
 }
 .org-name {
-  font-size: 11px;
+  font-size: 12px;
   color: #eef1f5;
   max-width: 100%;
   overflow: hidden;
@@ -900,7 +949,7 @@ body {
   white-space: nowrap;
 }
 .org-caption {
-  font-size: 9px;
+  font-size: 10px;
   color: #8b93a3;
   max-width: 100%;
   overflow: hidden;

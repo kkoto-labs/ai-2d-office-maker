@@ -1,5 +1,14 @@
-# 実行時に生成される個人のセッション情報（会話の記憶）
+# 個人の設定。配布するのは config/office.example.json のほうで、
+# 初回起動時にそこから office.json が作られる。
+config/office.json
+
+# フックの登録。インタプリタの名前もリポジトリの置き場所も環境ごとに違うので、
+# サーバー起動時に実際の絶対パスで書き出している。
+.claude/settings.local.json
+
+# 実行時に生成される個人のセッション情報（会話の記憶）と、各キャラの状態
 state/sessions/
+state/agents.json
 
 # 排他制御のためだけに作られるロックファイル
 state/agents.json.lock

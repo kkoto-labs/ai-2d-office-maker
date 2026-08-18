@@ -188,6 +188,71 @@ def relative_to_base(path):
     return (abs_path if rel.startswith("..") else rel).replace("\\", "/")
 
 
+# 状態を書き出したいイベント。matcher が要るものだけ第2要素に持たせる。
+HOOK_EVENTS = [
+    ("SessionStart", None), ("UserPromptSubmit", None),
+    ("PreToolUse", "*"), ("PostToolUse", "*"),
+    ("Stop", None), ("SubagentStart", None), ("SubagentStop", None),
+]
+
+
+def hook_settings():
+    """フック定義を、いまの環境の絶対パスで組み立てる。
+
+    ファイルに書き置くと環境固有の値がリポジトリに残る。インタプリタの名前
+    （python か python3 か）も、リポジトリの置き場所も、動かす人によって違う。
+    どちらも実行時にしか分からないので、その都度ここで作る。
+    """
+    script = os.path.join(BASE_DIR, "hooks", "update_state.py").replace("\\", "/")
+    command = f'"{sys.executable}" "{script}"'
+
+    hooks = {}
+    for event, matcher in HOOK_EVENTS:
+        entry = {"hooks": [{"type": "command", "command": command}]}
+        if matcher:
+            entry["matcher"] = matcher
+        hooks[event] = [entry]
+    return {"hooks": hooks}
+
+
+def install_local_hooks():
+    """このリポジトリで claude を動かしたときのために、フックを書き出す。
+
+    .claude/settings.local.json は個人用の層で、Gitの追跡外。配布物には
+    誰かのマシンのパスが混ざらず、手元では自動で正しい値になる。
+    """
+    path = os.path.join(BASE_DIR, ".claude", "settings.local.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            current = json.load(f)
+    except (OSError, ValueError):
+        current = {}
+
+    updated = {**current, **hook_settings()}
+    if updated == current:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(updated, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def subagent_definitions():
+    """.claude/agents/*.md を --agents に渡せるJSONに変換する。
+
+    作業ディレクトリがこのリポジトリの外にあると、定義ファイルが読まれず
+    部下を呼べなくなる。中身は同じものを、コマンドライン経由で持たせる。
+    """
+    agents = {}
+    for entry in officeconfig.subagent_catalog():
+        spec = {"description": entry["description"], "prompt": entry["body"]}
+        tools = [t.strip() for t in (entry.get("tools") or "").split(",") if t.strip()]
+        if tools:
+            spec["tools"] = tools
+        agents[entry["name"]] = spec
+    return json.dumps(agents, ensure_ascii=False) if agents else ""
+
+
 def claude_bin():
     """claude 実行ファイルのフルパスを返す。
 
@@ -229,6 +294,19 @@ def run_instruction(agent_id, instruction):
 
     for extra in extra_dirs:
         cmd += ["--add-dir", extra]
+
+    # 別のプロジェクトで働かせる場合、claude はその作業ディレクトリ側の
+    # .claude/ を読むので、このリポジトリのフック定義もサブエージェント定義も
+    # 視界に入らない。状態が一切書かれず、キャラクターが「待機中」のまま
+    # 動かなくなるため、どちらも明示的に渡す。
+    # 自分のリポジトリで動かすときは通常どおり読まれるので、二重登録を避けて何もしない。
+    if os.path.abspath(workdir) != BASE_DIR:
+        # 渡すのはフックだけにする。language のような好みの設定まで、
+        # 相手のプロジェクトへ押し付ける筋合いはない。
+        cmd += ["--settings", json.dumps(hook_settings(), ensure_ascii=False)]
+        agents_json = subagent_definitions()
+        if agents_json:
+            cmd += ["--agents", agents_json]
 
     prompt = system_prompt_for(cfg, agent)
     if prompt:
@@ -515,6 +593,8 @@ if __name__ == "__main__":
     if os.environ.get(CHILD_ENV_FLAG) != "1":
         sys.exit(supervise())
 
+    install_local_hooks()
+    officeconfig.ensure_config()
     threading.Thread(target=worker_loop, daemon=True).start()
     httpd = OfficeServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=watch_self_and_exit, args=(httpd,), daemon=True).start()

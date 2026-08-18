@@ -55,9 +55,12 @@ macOS / Linux:
 表示されるURL（`http://localhost:8420/viewer/`）をブラウザで開いてください。
 指示ボックスから、宛先を選んで指示を送れます。
 
-macOS / Linuxで使う場合は、`.claude/settings.json`のフックコマンドを
-`python`から`python3`に書き換えてください（Windowsの`python3`は
-Microsoft Storeのスタブに奪われていることが多いため、既定は`python`にしています）。
+初回起動時に、環境に合わせて次の2つが自動で用意されます。どちらもGitの追跡外なので、
+書き換えても配布物には影響しません。
+
+- `config/office.json` — あなたのオフィス構成。`config/office.example.json`から複製されます
+- `.claude/settings.local.json` — フックの登録。インタプリタとリポジトリの場所を
+  絶対パスで書き出すので、`python`か`python3`かを気にする必要はありません
 
 `server.py`は自分自身のファイルが更新されると自動的に再起動します（`state/`や
 `souls/`・`prompts/`の変更は元々リクエストごとに読み直すので再起動不要です）。
@@ -85,7 +88,7 @@ state/agents.json  ◀───────────────────�
   viewer/（1秒ごとにポーリングして描画）
 ```
 
-- `hooks/update_state.py`: Claude Codeのフック（`.claude/settings.json`で登録）から
+- `hooks/update_state.py`: Claude Codeのフック（`.claude/settings.local.json`で登録）から
   呼ばれ、「誰が・今どういう状態か」を`state/agents.json`に書き込みます。環境変数
   `AI_MIERUKA_AGENT`でどのキャラのフックかを判別しています。
 - `server.py`: ブラウザからの指示を受け取り、該当キャラのセッション（`state/sessions/`）
@@ -97,6 +100,8 @@ state/agents.json  ◀───────────────────�
   （Unixは`fcntl`、Windowsは`msvcrt`とAPIが違うので、その差もここで吸収します）。
 - `config/office.json`: 誰がいて・どんな関係で・どのプロジェクトを担当するかの
   単一の真実源です。`server.py`・フック・`viewer/`の3者ともこれを実行時に読みます。
+  中身は各自の設定なので追跡対象からは外し、雛形の`config/office.example.json`
+  だけを配布しています。
 - `officeconfig.py`: 上記の読み書きと検証を担います。設定画面からの入力がそのまま
   ファイル名や作業ディレクトリになるため、検証はここに集約しています。
 - `dirpicker.py`: フォルダ選択ダイアログを開くだけの小さなスクリプトです。ブラウザは
