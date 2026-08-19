@@ -12,6 +12,28 @@ const STATE_LABEL = {
   reporting: "報告中",
 };
 
+/** 生のstateから、実際に画面へ出す状態を求める。
+ *
+ *  キャラ本体とタブの「動いているか」表示が別々に鮮度判定をすると、
+ *  片方だけ古い状態を出したまま取り残される。
+ */
+function displayState(data) {
+  const ageMs = Date.now() - data.updated_at * 1000;
+  let state = data.state || "idle";
+  let detail = data.detail || (data.queue_len > 0 ? "指示を受け取りました" : "");
+  if (!data.state && data.queue_len > 0) state = "thinking";
+
+  if (state !== "idle" && ageMs > STALE_MS) {
+    state = "idle";
+    detail = "応答待ち";
+  }
+  if (state === "reporting" && ageMs > REPORT_DECAY_MS) {
+    state = "idle";
+    detail = "待機中";
+  }
+  return { state, detail };
+}
+
 
 // オフィスの構成は config/office.json が真実源で、サーバーの /api/office 経由で
 // 受け取る。以前はこのファイルにキャラ定義をベタ書きしていたため、設定を変える
@@ -208,8 +230,7 @@ function updateWorkspaceTabs() {
 
     const busy = members.some((a) => {
       const data = lastAgentData[a.id];
-      if (!data || !data.state || data.state === "idle") return false;
-      return Date.now() - data.updated_at * 1000 < STALE_MS;
+      return !!data && displayState(data).state !== "idle";
     });
     tab.classList.toggle("busy", busy);
 
@@ -217,6 +238,15 @@ function updateWorkspaceTabs() {
     if (key === activeWorkspace) seenReportAt[key] = latest;
     tab.querySelector(".tab-badge").hidden = latest <= (seenReportAt[key] ?? 0);
   }
+}
+
+/** 指示を送るAPI呼び出し。指示ボックスと質問モーダルの両方から使う。 */
+function sendInstruction(agentId, instruction) {
+  return fetch("/instruct", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instruction, agent_id: agentId }),
+  });
 }
 
 /** フロアごとの指示ボックスを動かす。 */
@@ -236,11 +266,7 @@ function wireConsole(floor) {
     button.disabled = true;
     statusEl.textContent = "送信中...";
     try {
-      const res = await fetch("/instruct", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instruction, agent_id: agentId }),
-      });
+      const res = await sendInstruction(agentId, instruction);
       if (res.ok) {
         const name = AGENTS.find((a) => a.id === agentId);
         statusEl.textContent = `${name ? name.name : agentId}に指示を送りました。`;
@@ -315,7 +341,7 @@ function render(agentsData) {
       const current = latestByWorkspace.get(key);
       if (!current || data.last_report_at > current.at) {
         latestByWorkspace.set(key, {
-          name: agent.name, dept: agent.dept,
+          name: agent.name, dept: agent.dept, agentId: agent.id,
           text: data.last_report, at: data.last_report_at,
         });
       }
@@ -514,22 +540,120 @@ function setupAdopt() {
   });
 }
 
-function renderAgent(agent, data) {
-  const ageMs = Date.now() - data.updated_at * 1000;
-  let state = data.state || "idle";
-  // 指示を受け取った直後は、まだフックが動く前で state が無い。順番待ちの
-  // 件数だけがある状態を「待機中」と読ませると、止まって見えてしまう。
-  let detail = data.detail || (data.queue_len > 0 ? "指示を受け取りました" : "");
-  if (!data.state && data.queue_len > 0) state = "thinking";
+// 選択式の確認が複数同時に来た場合、1つずつ順番にモーダルで出す。
+const questionQueue = [];
+let questionModalOpen = false;
+// 表示中(または直前に表示した)質問。閉じる時にlocalStorageへ既読を記録するために使う。
+let currentQuestion = null;
 
-  if (state !== "idle" && ageMs > STALE_MS) {
-    state = "idle";
-    detail = "応答待ち";
+// last_report は次の応答が来るまで state/agents.json に残り続けるので、
+// リロードするたびに同じ質問がまた出てくる。既読/回答済みをブラウザ側に
+// 覚えさせておき、同じ report(agentId + at)なら再ポップアップさせない。
+const QUESTION_SEEN_PREFIX = "aimieruka:question-seen:";
+
+function isQuestionHandled(agentId, at) {
+  try {
+    return localStorage.getItem(QUESTION_SEEN_PREFIX + agentId) === String(at);
+  } catch {
+    return false;
   }
-  if (state === "reporting" && ageMs > REPORT_DECAY_MS) {
-    state = "idle";
-    detail = "待機中";
+}
+
+function markQuestionHandled(agentId, at) {
+  try {
+    localStorage.setItem(QUESTION_SEEN_PREFIX + agentId, String(at));
+  } catch {
+    // localStorageが使えなくても、モーダル表示自体は諦めない。
   }
+}
+
+function setupQuestionModal() {
+  document.getElementById("question-close").addEventListener("click", closeQuestionModal);
+  document.getElementById("question-later").addEventListener("click", closeQuestionModal);
+  document.getElementById("question-modal").addEventListener("click", (e) => {
+    if (e.target.id === "question-modal") closeQuestionModal();
+  });
+}
+
+function queueQuestionModal(payload) {
+  if (!payload.agentId) return;
+  questionQueue.push(payload);
+  if (!questionModalOpen) showNextQuestion();
+}
+
+function showNextQuestion() {
+  const payload = questionQueue.shift();
+  if (!payload) {
+    questionModalOpen = false;
+    currentQuestion = null;
+    return;
+  }
+  questionModalOpen = true;
+  currentQuestion = payload;
+
+  const { agentId, agentName, dept, question, options } = payload;
+  document.getElementById("question-title").textContent = `${agentName}からの確認`;
+
+  const body = document.getElementById("question-body");
+  body.innerHTML = `
+    <p class="question-who">${escapeHtml(dept)}・${escapeHtml(agentName)}</p>
+    <p class="question-text">${escapeHtml(question).replace(/\n/g, "<br>")}</p>
+    <div class="question-options"></div>
+    <div class="question-free">
+      <input type="text" class="question-free-input" placeholder="他の答えを書く" />
+      <button type="button" class="btn-ghost question-free-send">送信</button>
+    </div>`;
+
+  const optionsEl = body.querySelector(".question-options");
+  for (const option of options) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-primary question-option";
+    btn.textContent = option;
+    btn.addEventListener("click", () => answerQuestion(agentId, option));
+    optionsEl.appendChild(btn);
+  }
+
+  const freeInput = body.querySelector(".question-free-input");
+  const sendFree = () => {
+    const value = freeInput.value.trim();
+    if (value) answerQuestion(agentId, value);
+  };
+  body.querySelector(".question-free-send").addEventListener("click", sendFree);
+  freeInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendFree();
+  });
+
+  document.getElementById("question-status").textContent = "";
+  document.getElementById("question-modal").hidden = false;
+}
+
+function closeQuestionModal() {
+  document.getElementById("question-modal").hidden = true;
+  questionModalOpen = false;
+  if (currentQuestion) markQuestionHandled(currentQuestion.agentId, currentQuestion.at);
+  currentQuestion = null;
+  if (questionQueue.length) showNextQuestion();
+}
+
+async function answerQuestion(agentId, answer) {
+  const statusEl = document.getElementById("question-status");
+  statusEl.textContent = "送信中...";
+  try {
+    const res = await sendInstruction(agentId, answer);
+    if (res.ok) {
+      closeQuestionModal();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      statusEl.textContent = `送信失敗: ${err.error || res.status}`;
+    }
+  } catch (err) {
+    statusEl.textContent = `送信エラー: ${err.message}`;
+  }
+}
+
+function renderAgent(agent, data) {
+  const { state, detail } = displayState(data);
 
   const charEl = document.getElementById(`char-${agent.id}`);
   const bubbleEl = document.getElementById(`bubble-${agent.id}`);
@@ -577,13 +701,65 @@ function renderSubagents(agentId, activeSubagents) {
   }
 }
 
+// 報告の末尾にこの形式があれば、社長への選択式の確認だと分かる。
+// [SHACHO_QUESTION]\n質問\n1. 選択肢A\n2. 選択肢B\n[/SHACHO_QUESTION]
+const QUESTION_RE = /\[SHACHO_QUESTION\]\s*([\s\S]*?)\[\/SHACHO_QUESTION\]/;
+
+// 選択肢の行頭記号は「1.」「A:」「①」など、モデルが書く形がまちまちなので
+// 数字・英字のどちらでも受け付ける。記号が無い行も、最初の選択肢が
+// 見つかった後に出てくるものは選択肢として扱う。
+const OPTION_LINE_RE = /^(?:\d+|[A-Za-zＡ-Ｚａ-ｚ])[.)．、:：]\s*(.+)$/;
+
+// 「1. B: 内容」のように番号とラベルを二重に付ける書き方もあるので、
+// 先頭の記号は消えなくなるまで（最大2段まで）剥がす。
+function stripOptionPrefix(line) {
+  let text = line;
+  for (let i = 0; i < 2; i++) {
+    const m = OPTION_LINE_RE.exec(text);
+    if (!m) break;
+    text = m[1].trim();
+  }
+  return text;
+}
+
+function parseQuestion(text) {
+  const m = QUESTION_RE.exec(text || "");
+  if (!m) return null;
+
+  const lines = m[1].split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+
+  let splitAt = lines.findIndex((l) => OPTION_LINE_RE.test(l));
+  if (splitAt <= 0) splitAt = 1; // 記号付きの行が見当たらなければ、先頭1行を質問文とみなす。
+
+  const questionLines = lines.slice(0, splitAt);
+  const options = lines.slice(splitAt).map(stripOptionPrefix);
+  if (!options.length) return null;
+
+  return {
+    question: questionLines.join("\n"),
+    options,
+    rest: (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim(),
+  };
+}
+
 function renderReport(workspaceKey, report) {
   if (lastRenderedReportAt[workspaceKey] === report.at) return;
   const panel = document.querySelector(`[data-reply="${CSS.escape(workspaceKey)}"]`);
   if (!panel) return;
   lastRenderedReportAt[workspaceKey] = report.at;
+
+  const parsed = parseQuestion(report.text);
   panel.querySelector(".reply-title").textContent = `${report.name}（${report.dept}）からの回答`;
-  panel.querySelector(".reply-text").innerHTML = renderMarkdown(report.text);
+  panel.querySelector(".reply-text").innerHTML =
+    renderMarkdown(parsed ? (parsed.rest || "（質問はポップアップで確認してください）") : report.text);
+
+  if (parsed && !isQuestionHandled(report.agentId, report.at)) {
+    queueQuestionModal({
+      agentId: report.agentId, agentName: report.name, dept: report.dept,
+      question: parsed.question, options: parsed.options, at: report.at,
+    });
+  }
 }
 
 function renderInline(str) {
@@ -680,6 +856,7 @@ function setupLogToggle() {
 async function init() {
   setupLogToggle();
   setupAdopt();
+  setupQuestionModal();
   try {
     await loadOffice();
   } catch (e) {

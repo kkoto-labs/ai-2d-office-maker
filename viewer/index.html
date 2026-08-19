@@ -59,6 +59,22 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="question-modal" hidden>
+    <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="question-title">
+      <header class="modal-head">
+        <h2 id="question-title">確認</h2>
+        <button type="button" class="modal-close" id="question-close" aria-label="閉じる">×</button>
+      </header>
+      <div class="question-body" id="question-body"></div>
+      <footer class="modal-foot">
+        <div class="settings-status" id="question-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="question-later">後で答える</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
   <script src="common.js"></script>
   <script src="app.js"></script>
 </body>

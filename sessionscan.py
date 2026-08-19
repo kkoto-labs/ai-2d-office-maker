@@ -6,7 +6,9 @@
 Claude Code は会話を ~/.claude/projects/<作業ディレクトリ>/<セッションID>.jsonl に
 書き続けているので、その末尾だけを覗いて「いま誰が何をしているか」を拾う。
 
-読むのは種別・時刻・ツール名だけで、会話の中身には触れない。
+何をしているか分かるよう、ツールの入力（コマンドやファイル名など）や直近の
+応答テキストも短く覗くが、いずれも先頭の数十文字に切り詰めて画面に出すだけで、
+どこかに保存したり別セッションへ転送したりはしない。
 """
 import json
 import os
@@ -16,7 +18,9 @@ PROJECTS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "projects")
 # 末尾から読む量。1件の記録が数KBあるので、これだけあれば直近の数件は入る。
 TAIL_BYTES = 64 * 1024
 # これ以上更新が無いセッションは、もう終わったものとして扱う。
-ACTIVE_WINDOW = 90.0
+# 長いツール実行中はログが暫く追記されないことがあるため、短すぎると
+# 動いているセッションを誤って「終わった」と見なしてしまう。
+ACTIVE_WINDOW = 600.0
 
 
 def scan(exclude_sessions=(), now=None):
@@ -56,9 +60,11 @@ def scan(exclude_sessions=(), now=None):
 
 
 def _read_last_record(path):
-    """ファイル末尾から、最後に書かれた完全な1件を取り出す。
+    """ファイル末尾から、最後に書かれた user/assistant の1件を取り出す。
 
-    数MBに育つので、頭から読むと1秒ごとの巡回に耐えない。
+    数MBに育つので、頭から読むと1秒ごとの巡回に耐えない。Claude Desktop経由の
+    セッションは、queue-operationやattachmentなど画面に出す情報を持たない
+    補助的な記録も書くので、それらは読み飛ばして意味のある記録まで遡る。
     """
     try:
         with open(path, "rb") as f:
@@ -75,9 +81,12 @@ def _read_last_record(path):
         if not line.strip():
             continue
         try:
-            return json.loads(line.decode("utf-8"))
+            record = json.loads(line.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             continue
+        else:
+            if record.get("type") in ("user", "assistant"):
+                return record
     return None
 
 
@@ -96,16 +105,47 @@ def _summarize(session_id, record, path):
     }
 
 
+DETAIL_LEN = 60
+
+# ツールごとに、何をしているかが分かる引数だけを取り出す。
+TOOL_INPUT_KEY = {
+    "Bash": "command", "PowerShell": "command",
+    "Read": "file_path", "Edit": "file_path", "Write": "file_path",
+    "NotebookEdit": "notebook_path",
+    "Grep": "pattern", "Glob": "pattern",
+    "WebSearch": "query", "WebFetch": "url",
+}
+
+
+def _tool_detail(name, tool_input):
+    key = TOOL_INPUT_KEY.get(name)
+    value = (tool_input or {}).get(key) if key else None
+    if not value:
+        return name
+    if key == "file_path" or key == "notebook_path":
+        value = os.path.basename(value)
+    return f"{name}: {value}"[:DETAIL_LEN]
+
+
 def _read_activity(record):
     """最後の記録から、いまの様子を推し量る。"""
     message = record.get("message")
     message = message if isinstance(message, dict) else {}
+    blocks = [c for c in (message.get("content") or []) if isinstance(c, dict)]
 
     if record.get("type") == "user":
-        return "thinking", "指示を受け取りました"
+        texts = [c.get("content") for c in blocks if c.get("type") == "tool_result"]
+        if texts:
+            return "working", "ツール結果を確認中"
+        text = message.get("content") if isinstance(message.get("content"), str) else None
+        return "thinking", (text or "指示を受け取りました")[:DETAIL_LEN]
 
-    tools = [c.get("name") for c in message.get("content") or []
-             if isinstance(c, dict) and c.get("type") == "tool_use"]
+    tools = [c for c in blocks if c.get("type") == "tool_use"]
     if tools:
-        return "working", tools[0]
+        tool = tools[0]
+        return "working", _tool_detail(tool.get("name") or "", tool.get("input"))
+
+    texts = [c.get("text") for c in blocks if c.get("type") == "text" and c.get("text")]
+    if texts:
+        return "reporting", texts[-1].strip().replace("\n", " ")[:DETAIL_LEN]
     return "reporting", "応答中"

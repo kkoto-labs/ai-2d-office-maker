@@ -34,6 +34,22 @@ def session_file(agent_id):
     return os.path.join(SESSION_DIR, f"{agent_id}.txt")
 
 
+# ブラウザには最終的な報告テキストしか届かない（ヘッドレス実行なので途中で
+# 対話できない）。社長に選択肢から選んでほしい場面では、この形式で報告の
+# 最後に書いてもらうことで、画面側がボタン付きのモーダルとして表示できる。
+QUESTION_FORMAT_PROMPT = (
+    "社長に選択肢から選んでもらいたい確認がある場合は、報告の最後に次の形式で"
+    "書いてください（自由記述で答えてほしいだけなら、この形式は使わず普通に"
+    "聞いてください）:\n\n"
+    "[SHACHO_QUESTION]\n"
+    "質問文をここに\n"
+    "1. 選択肢A\n"
+    "2. 選択肢B\n"
+    "[/SHACHO_QUESTION]\n\n"
+    "選択肢は2〜4個にしてください。"
+)
+
+
 def system_prompt_for(cfg, agent):
     """SOUL(人格) + 役割プロンプト + 関係性(自動生成) を連結する。
 
@@ -64,6 +80,8 @@ def system_prompt_for(cfg, agent):
     relations = relationship_prompt(cfg, agent)
     if relations:
         parts.append(relations)
+
+    parts.append(QUESTION_FORMAT_PROMPT)
 
     return "\n\n".join(parts) if parts else None
 
