@@ -26,7 +26,7 @@ AGENTS_DIR = os.path.join(BASE_DIR, ".claude", "agents")
 SPRITE_DIR = os.path.join(BASE_DIR, "viewer", "assets", "characters")
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
-PROJECT_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+WORKSPACE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 MAX_NAME_LEN = 40
 MAX_SOUL_BYTES = 64 * 1024
 # どの部署にも属していない部下の置き場所。空文字だと画面上で見失うため。
@@ -58,14 +58,24 @@ def load():
 def _migrate(cfg):
     """古い形の設定を、いまの読み手が期待する形に揃えてから渡す。
 
-    担当プロジェクトは project(単数・文字列)から projects(配列)へ移った。
-    読み込んだ時点で均しておかないと、サーバー・フック・ビューアがそれぞれ
-    別の形を想定することになり、存在しないフィールドを触って壊れる。
+    担当先は project(単数・文字列) → projects(配列) → workspaces(改名) と
+    移ってきた。読み込んだ時点で均しておかないと、サーバー・フック・ビューアが
+    それぞれ別の形を想定することになり、存在しないフィールドを触って壊れる。
     """
+    if "workspaces" not in cfg and "projects" in cfg:
+        cfg["workspaces"] = cfg.pop("projects")
+    cfg.setdefault("workspaces", {})
+
     for agent in cfg.get("agents") or []:
-        if "projects" not in agent:
-            agent["projects"] = [agent["project"]] if agent.get("project") else []
+        if "workspaces" not in agent:
+            if agent.get("projects"):
+                agent["workspaces"] = agent["projects"]
+            elif agent.get("project"):
+                agent["workspaces"] = [agent["project"]]
+            else:
+                agent["workspaces"] = []
         agent.pop("project", None)
+        agent.pop("projects", None)
 
     # 部下は画像だけを持つ subagent_sprites から、部署も持てる subagents へ移った。
     # 移行時の所属は、その部下を実際に使っている上司の部署から引き継ぐ。
@@ -118,29 +128,29 @@ def agent_ids(cfg):
     return [a["id"] for a in cfg.get("agents", [])]
 
 
-def project_path(cfg, key):
-    """プロジェクトキーを実際の作業ディレクトリ(絶対パス)に解決する。
+def workspace_path(cfg, key):
+    """ワークスペースキーを実際の作業ディレクトリ(絶対パス)に解決する。
 
     未知のキーやディレクトリが消えている場合はリポジトリ直下にフォールバックする。
     指示の実行先が意図せず別の場所になるより、既定に戻したほうが安全なため。
     """
-    proj = (cfg.get("projects") or {}).get(key)
+    proj = (cfg.get("workspaces") or {}).get(key)
     if not proj:
         return BASE_DIR
     path = os.path.abspath(os.path.join(BASE_DIR, proj.get("path", ".")))
     return path if os.path.isdir(path) else BASE_DIR
 
 
-def project_paths(cfg, agent):
-    """エージェントが担当する全プロジェクトの実パスを返す。
+def workspace_paths(cfg, agent):
+    """エージェントが担当する全ワークスペースの実パスを返す。
 
     先頭が作業ディレクトリ(cwd)、2つ目以降は claude の --add-dir に渡す
     「アクセスを許す追加ディレクトリ」になる。
     """
-    keys = agent.get("projects") or []
+    keys = agent.get("workspaces") or []
     paths = []
     for key in keys:
-        path = project_path(cfg, key)
+        path = workspace_path(cfg, key)
         if path not in paths:
             paths.append(path)
     return paths or [BASE_DIR]
@@ -315,7 +325,7 @@ def validate(cfg):
     if not isinstance(cfg, dict):
         raise ConfigError("設定の形式が不正です。")
 
-    projects = _validate_projects(cfg.get("projects"))
+    workspaces = _validate_workspaces(cfg.get("workspaces"))
     sprites = set(available_sprites())
     known_subagents = {s["name"] for s in subagent_catalog()}
 
@@ -326,7 +336,7 @@ def validate(cfg):
     agents = []
     seen_ids = set()
     for raw in raw_agents:
-        agents.append(_validate_agent(raw, projects, sprites, known_subagents, seen_ids))
+        agents.append(_validate_agent(raw, workspaces, sprites, known_subagents, seen_ids))
 
     # consults は「実在するエージェント」だけを指せる。自分自身は指せない。
     valid_ids = {a["id"] for a in agents}
@@ -337,7 +347,7 @@ def validate(cfg):
     subagents = _validate_subagent_meta(cfg.get("subagents"), sprites, known_subagents)
     result = {
         "departments": {},
-        "projects": projects,
+        "workspaces": workspaces,
         "agents": agents,
         "subagents": subagents,
     }
@@ -381,29 +391,29 @@ def _validate_departments(raw, cfg):
     return depts
 
 
-def _validate_projects(raw):
+def _validate_workspaces(raw):
     if not isinstance(raw, dict) or not raw:
-        raise ConfigError("プロジェクトが1つも定義されていません。")
-    projects = {}
+        raise ConfigError("ワークスペースが1つも定義されていません。")
+    workspaces = {}
     for key, value in raw.items():
-        if not PROJECT_KEY_RE.match(str(key)):
-            raise ConfigError(f"プロジェクトIDが不正です: {key!r}")
+        if not WORKSPACE_KEY_RE.match(str(key)):
+            raise ConfigError(f"ワークスペースIDが不正です: {key!r}")
         if not isinstance(value, dict):
-            raise ConfigError(f"プロジェクト定義が不正です: {key!r}")
+            raise ConfigError(f"ワークスペース定義が不正です: {key!r}")
         path = str(value.get("path", ".")).strip() or "."
         resolved = os.path.abspath(os.path.join(BASE_DIR, path))
         if not os.path.isdir(resolved):
             raise ConfigError(
-                f"プロジェクト「{value.get('name', key)}」の作業ディレクトリが"
+                f"ワークスペース「{value.get('name', key)}」の作業ディレクトリが"
                 f"見つかりません: {resolved}")
-        projects[key] = {
-            "name": _clean_text(value.get("name") or key, "プロジェクト名"),
+        workspaces[key] = {
+            "name": _clean_text(value.get("name") or key, "ワークスペース名"),
             "path": path,
         }
-    return projects
+    return workspaces
 
 
-def _validate_agent(raw, projects, sprites, known_subagents, seen_ids):
+def _validate_agent(raw, workspaces, sprites, known_subagents, seen_ids):
     if not isinstance(raw, dict):
         raise ConfigError("エージェント定義が不正です。")
 
@@ -427,20 +437,18 @@ def _validate_agent(raw, projects, sprites, known_subagents, seen_ids):
         "role": _clean_text(raw.get("role"), "役職"),
         "sprite": sprite,
         "soul": safe_soul_filename(raw.get("soul") or name),
-        "projects": _validate_agent_projects(raw, projects, name),
+        "workspaces": _validate_agent_workspaces(raw, workspaces, name),
         "consults": [str(c).strip() for c in (raw.get("consults") or [])],
         "subagents": [s for s in (raw.get("subagents") or []) if s in known_subagents],
     }
 
 
-def _validate_agent_projects(raw, projects, name):
-    """担当プロジェクトを検証する。先頭が作業ディレクトリになる。
+def _validate_agent_workspaces(raw, workspaces, name):
+    """担当ワークスペースを検証する。先頭が作業ディレクトリになる。
 
-    以前は project(単数・文字列)だったので、古い設定も読めるようにしておく。
+    形は _migrate で揃えてあるので、ここでは中身だけを見る。
     """
-    keys = raw.get("projects")
-    if keys is None and raw.get("project"):
-        keys = [raw["project"]]
+    keys = raw.get("workspaces")
     keys = [str(k).strip() for k in (keys or [])]
 
     # 重複は落とす。--add-dir に同じパスを二重に渡す意味がないため。
@@ -448,13 +456,13 @@ def _validate_agent_projects(raw, projects, name):
     for key in keys:
         if key in seen:
             continue
-        if key not in projects:
-            raise ConfigError(f"プロジェクトが見つかりません: {key!r}")
+        if key not in workspaces:
+            raise ConfigError(f"ワークスペースが見つかりません: {key!r}")
         seen.add(key)
         cleaned.append(key)
 
     if not cleaned:
-        raise ConfigError(f"{name} にプロジェクトが割り当てられていません。")
+        raise ConfigError(f"{name} にワークスペースが割り当てられていません。")
     return cleaned
 
 

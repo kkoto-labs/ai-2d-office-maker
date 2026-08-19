@@ -13,7 +13,7 @@
       "parent": "秘書室"
     }
   },
-  "projects": {
+  "workspaces": {
     "self": {
       "name": "AI見える化オフィス",
       "path": "."
@@ -27,15 +27,15 @@
       "role": "秘書",
       "sprite": "pipo-charachip017.png",
       "soul": "ユイ.md",
-      "projects": [
-        "self"
-      ],
       "consults": [
         "P",
         "D",
         "M"
       ],
-      "subagents": []
+      "subagents": [],
+      "workspaces": [
+        "self"
+      ]
     },
     {
       "id": "P",
@@ -44,11 +44,11 @@
       "role": "PM",
       "sprite": "pipo-charachip015a.png",
       "soul": "発田案.md",
-      "projects": [
-        "self"
-      ],
       "consults": [],
-      "subagents": []
+      "subagents": [],
+      "workspaces": [
+        "self"
+      ]
     },
     {
       "id": "D",
@@ -57,9 +57,6 @@
       "role": "PM",
       "sprite": "pipo-charachip025.png",
       "soul": "築山創.md",
-      "projects": [
-        "self"
-      ],
       "consults": [],
       "subagents": [
         "明石要",
@@ -68,6 +65,9 @@
         "見城評",
         "精田照",
         "試崎験"
+      ],
+      "workspaces": [
+        "self"
       ]
     },
     {
@@ -77,11 +77,11 @@
       "role": "PM",
       "sprite": "pipo-charachip021.png",
       "soul": "広瀬映.md",
-      "projects": [
-        "self"
-      ],
       "consults": [],
-      "subagents": []
+      "subagents": [],
+      "workspaces": [
+        "self"
+      ]
     }
   ],
   "subagents": {

@@ -1,6 +1,8 @@
 const POLL_MS = 1000;
 const STALE_MS = 90 * 1000;
 const REPORT_DECAY_MS = 4000;
+// 選択欄の「新しく作る」を表す値。実在のキーと衝突しない綴りにしてある。
+const NEW_VALUE = "__new__";
 
 const STATE_LABEL = {
   idle: "待機中",
@@ -22,7 +24,7 @@ let office = null;
 const lastRenderedLogKey = {};
 const lastRenderedSubagentKey = {};
 const lastRenderedGuestKey = {};
-// プロジェクトごとに、最後に描いた回答の時刻を覚える。
+// ワークスペースごとに、最後に描いた回答の時刻を覚える。
 const lastRenderedReportAt = {};
 
 // --------------------------------------------------------------------------
@@ -41,8 +43,8 @@ function buildRooms() {
   const roomsEl = document.getElementById("rooms");
   // 組み直しても、選んでいた宛先と書きかけの指示は失わないようにする。
   const previous = {};
-  for (const form of roomsEl.querySelectorAll(".project-console")) {
-    previous[form.dataset.project] = {
+  for (const form of roomsEl.querySelectorAll(".workspace-console")) {
+    previous[form.dataset.workspace] = {
       target: form.querySelector(".instruct-target").value,
       text: form.querySelector(".instruct-input").value,
     };
@@ -52,45 +54,45 @@ function buildRooms() {
   roomsEl.innerHTML = "";
   for (const key of Object.keys(lastRenderedSubagentKey)) delete lastRenderedSubagentKey[key];
 
-  // 担当プロジェクトごとにフロアを分ける。別のリポジトリを見ている人が
+  // 担当ワークスペースごとにフロアを分ける。別のリポジトリを見ている人が
   // 同じ場所に混ざっていると、どの成果物の話をしているのか読めなくなる。
-  const projects = office.config.projects || {};
-  const byProject = new Map();
+  const workspaces = office.config.workspaces || {};
+  const byWorkspace = new Map();
   for (const agent of AGENTS) {
-    const key = (agent.projects || [])[0] || "";
-    if (!byProject.has(key)) byProject.set(key, []);
-    byProject.get(key).push(agent);
+    const key = (agent.workspaces || [])[0] || "";
+    if (!byWorkspace.has(key)) byWorkspace.set(key, []);
+    byWorkspace.get(key).push(agent);
   }
 
   const allDepts = [];
-  for (const [projectKey, members] of byProject) {
+  for (const [workspaceKey, members] of byWorkspace) {
     const floor = document.createElement("section");
-    floor.className = "project-floor";
-    floor.dataset.project = projectKey;
+    floor.className = "workspace-floor";
+    floor.dataset.workspace = workspaceKey;
 
-    const project = projects[projectKey] || {};
+    const workspace = workspaces[workspaceKey] || {};
 
-    // プロジェクトが1つしかないなら見出しは足さない。分ける意味がないため。
-    const head = byProject.size > 1 ? `
-      <div class="project-floor-head">
-        <span class="project-floor-name">${escapeHtml(project.name || projectKey || "未設定")}</span>
-        <code class="project-floor-path">${escapeHtml(project.path || "")}</code>
-        <span class="project-floor-count">${members.length}人</span>
+    // ワークスペースが1つしかないなら見出しは足さない。分ける意味がないため。
+    const head = byWorkspace.size > 1 ? `
+      <div class="workspace-floor-head">
+        <span class="workspace-floor-name">${escapeHtml(workspace.name || workspaceKey || "未設定")}</span>
+        <code class="workspace-floor-path">${escapeHtml(workspace.path || "")}</code>
+        <span class="workspace-floor-count">${members.length}人</span>
       </div>` : "";
 
-    // 指示はプロジェクトごとに出す。宛先もそのフロアの人だけに絞る。
+    // 指示はワークスペースごとに出す。宛先もそのフロアの人だけに絞る。
     // 全員が1つの欄に並んでいると、別のリポジトリの担当へ誤って投げてしまう。
     floor.innerHTML = `${head}
-      <form class="project-console" data-project="${escapeHtml(projectKey)}">
+      <form class="workspace-console" data-workspace="${escapeHtml(workspaceKey)}">
         <select class="instruct-target">${members.map((a) =>
           `<option value="${escapeHtml(a.id)}">${escapeHtml(a.dept)} - ${escapeHtml(a.name)}</option>`).join("")}</select>
         <textarea class="instruct-input" rows="2"
-          placeholder="${escapeHtml(project.name || "このプロジェクト")}への指示を入力..."></textarea>
+          placeholder="${escapeHtml(workspace.name || "このワークスペース")}への指示を入力..."></textarea>
         <button type="submit">指示を送る</button>
       </form>
-      <div class="instruct-status" data-status="${escapeHtml(projectKey)}"></div>
+      <div class="instruct-status" data-status="${escapeHtml(workspaceKey)}"></div>
       <div class="rooms-group"></div>
-      <div class="console-reply" data-reply="${escapeHtml(projectKey)}">
+      <div class="console-reply" data-reply="${escapeHtml(workspaceKey)}">
         <h2 class="reply-title">回答</h2>
         <div class="reply-text">まだ報告はありません。</div>
       </div>`;
@@ -98,7 +100,7 @@ function buildRooms() {
     const group = floor.querySelector(".rooms-group");
     roomsEl.appendChild(floor);
 
-    const saved = previous[projectKey];
+    const saved = previous[workspaceKey];
     if (saved) {
       const select = floor.querySelector(".instruct-target");
       if (members.some((a) => a.id === saved.target)) select.value = saved.target;
@@ -129,11 +131,97 @@ function buildRooms() {
   }
 
   document.getElementById("topbar-sub").textContent = allDepts.join("・");
+  buildWorkspaceTabs([...byWorkspace.keys()], workspaces);
+}
+
+// いま見ているワークスペース。タブを切り替えても、設定変更で組み直しても保つ。
+let activeWorkspace = null;
+// 各ワークスペースで最後に確認した報告の時刻。これより新しければ未読。
+const seenReportAt = {};
+// 直近のポーリング結果。タブの状況表示はここを見る。
+let lastAgentData = {};
+
+function buildWorkspaceTabs(keys, workspaces) {
+  const bar = document.getElementById("workspace-tabs");
+  // 1つしかないなら切り替える先が無い。タブを出さず、そのまま表示する。
+  bar.hidden = keys.length < 2;
+  bar.innerHTML = "";
+  if (!keys.includes(activeWorkspace)) activeWorkspace = keys[0] ?? null;
+
+  for (const key of keys) {
+    const workspace = workspaces[key] || {};
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "workspace-tab";
+    tab.dataset.tab = key;
+    tab.innerHTML = `
+      <span class="tab-pulse"></span>
+      <span class="tab-name">${escapeHtml(workspace.name || key || "未設定")}</span>
+      <span class="tab-badge" hidden>●</span>`;
+    tab.addEventListener("click", () => selectWorkspace(key));
+    bar.appendChild(tab);
+  }
+  applyWorkspaceVisibility();
+}
+
+function selectWorkspace(key) {
+  activeWorkspace = key;
+  // 開いた時点で、そのワークスペースの報告は読んだものとして扱う。
+  seenReportAt[key] = latestReportAt(key);
+  applyWorkspaceVisibility();
+}
+
+function workspaceOf(agent) {
+  return (agent.workspaces || [])[0] || "";
+}
+
+function latestReportAt(key) {
+  let latest = 0;
+  for (const agent of AGENTS) {
+    if (workspaceOf(agent) !== key) continue;
+    const data = lastAgentData[agent.id];
+    if (data && data.last_report_at > latest) latest = data.last_report_at;
+  }
+  return latest;
+}
+
+function applyWorkspaceVisibility() {
+  const single = document.getElementById("workspace-tabs").hidden;
+  for (const floor of document.querySelectorAll(".workspace-floor")) {
+    floor.hidden = !single && floor.dataset.workspace !== activeWorkspace;
+  }
+  for (const tab of document.querySelectorAll(".workspace-tab")) {
+    tab.classList.toggle("active", tab.dataset.tab === activeWorkspace);
+  }
+  updateWorkspaceTabs();
+}
+
+/** タブに「動いているか」と「未読の報告があるか」を出す。
+ *
+ *  裏で走らせているワークスペースが終わったことに気づけないと、切り替えて
+ *  確認しに行くきっかけが無い。
+ */
+function updateWorkspaceTabs() {
+  for (const tab of document.querySelectorAll(".workspace-tab")) {
+    const key = tab.dataset.tab;
+    const members = AGENTS.filter((a) => workspaceOf(a) === key);
+
+    const busy = members.some((a) => {
+      const data = lastAgentData[a.id];
+      if (!data || !data.state || data.state === "idle") return false;
+      return Date.now() - data.updated_at * 1000 < STALE_MS;
+    });
+    tab.classList.toggle("busy", busy);
+
+    const latest = latestReportAt(key);
+    if (key === activeWorkspace) seenReportAt[key] = latest;
+    tab.querySelector(".tab-badge").hidden = latest <= (seenReportAt[key] ?? 0);
+  }
 }
 
 /** フロアごとの指示ボックスを動かす。 */
 function wireConsole(floor) {
-  const form = floor.querySelector(".project-console");
+  const form = floor.querySelector(".workspace-console");
   const input = form.querySelector(".instruct-input");
   const select = form.querySelector(".instruct-target");
   const button = form.querySelector("button");
@@ -207,9 +295,10 @@ async function poll() {
 }
 
 function render(agentsData) {
+  lastAgentData = agentsData;
   const mergedLog = [];
-  // 回答はプロジェクトごとに出す。指示を出した場所で答えが返るほうが追える。
-  const latestByProject = new Map();
+  // 回答はワークスペースごとに出す。指示を出した場所で答えが返るほうが追える。
+  const latestByWorkspace = new Map();
 
   for (const agent of AGENTS) {
     // 作ったばかりのエージェントは状態ファイルにまだ現れない。データが無い＝
@@ -222,10 +311,10 @@ function render(agentsData) {
       mergedLog.push({ ...item, name: agent.name, agentId: agent.id });
     }
     if (data.last_report) {
-      const key = (agent.projects || [])[0] || "";
-      const current = latestByProject.get(key);
+      const key = (agent.workspaces || [])[0] || "";
+      const current = latestByWorkspace.get(key);
       if (!current || data.last_report_at > current.at) {
-        latestByProject.set(key, {
+        latestByWorkspace.set(key, {
           name: agent.name, dept: agent.dept,
           text: data.last_report, at: data.last_report_at,
         });
@@ -235,7 +324,8 @@ function render(agentsData) {
 
   mergedLog.sort((a, b) => (a.time > b.time ? 1 : a.time < b.time ? -1 : 0));
   renderLog(mergedLog);
-  for (const [key, report] of latestByProject) renderReport(key, report);
+  for (const [key, report] of latestByWorkspace) renderReport(key, report);
+  updateWorkspaceTabs();
 }
 
 // このオフィスの管理外で動いている claude。設定に無いので配席もできず、
@@ -275,12 +365,153 @@ function renderGuests(guests) {
     el.innerHTML = `
       <div class="guest-sprite" style="background-image: url('assets/characters/${guestSprite(guest.session)}')"></div>
       <div class="guest-text">
-        <span class="guest-name">${escapeHtml(guest.project)}</span>
+        <span class="guest-name">${escapeHtml(guest.folder)}</span>
         <span class="guest-detail">${escapeHtml(STATE_LABEL[guest.state] || guest.state)}・${escapeHtml(guest.detail)}</span>
       </div>`;
     el.title = `${guest.cwd}\nセッション ${guest.short}`;
+    el.appendChild(adoptButton(guest));
     list.appendChild(el);
   }
+}
+
+function adoptButton(guest) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "guest-adopt";
+  button.textContent = "迎え入れる";
+  button.addEventListener("click", () => openAdopt(guest));
+  return button;
+}
+
+// ---- 迎え入れ -------------------------------------------------------------
+
+let adoptTarget = null;
+
+function openAdopt(guest) {
+  adoptTarget = guest;
+  const config = office.config;
+  const depts = Object.keys(config.departments || {});
+  // このセッションの作業先が、すでにワークスペースとして登録されているか。
+  // 設定上のパスは "." のような相対表記なので、解決済みの絶対パスで比べる。
+  const known = Object.entries(office.workspace_paths || {})
+    .find(([, abs]) => sameFolder(abs, guest.cwd));
+
+  const workspaceOptions = Object.entries(config.workspaces || {})
+    .map(([key, w]) => `<option value="${escapeHtml(key)}"${
+      known && known[0] === key ? " selected" : ""}>${escapeHtml(w.name)}</option>`).join("");
+
+  document.getElementById("adopt-body").innerHTML = `
+    <div class="adopt-who">
+      <div class="guest-sprite" style="background-image: url('assets/characters/${guestSprite(guest.session)}')"></div>
+      <div class="nav-text">
+        <span class="nav-name">${escapeHtml(guest.folder)}</span>
+        <span class="nav-dept">セッション ${escapeHtml(guest.short)}</span>
+      </div>
+    </div>
+    <p class="hint"><code>${escapeHtml(guest.cwd)}</code></p>
+    ${guest.state !== "idle" ? `<p class="warn">このセッションはまだ動いているようです。
+      ターミナル側を終了してから迎え入れてください。動いたまま指示を送ると、
+      同じ会話に2つのプロセスが書き込んで壊れます。</p>` : ""}
+
+    <div class="field-grid">
+      <label class="field"><span>名前</span>
+        <input type="text" id="adopt-name" value="${escapeHtml(guest.folder)}" maxlength="40" /></label>
+      <label class="field"><span>役職</span>
+        <input type="text" id="adopt-role" value="担当" maxlength="40" /></label>
+    </div>
+
+    <label class="field"><span>配属する部署</span>
+      <select id="adopt-dept">
+        ${depts.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("")}
+        <option value="${NEW_VALUE}">＋ 新しい部署をつくる…</option>
+      </select></label>
+
+    <label class="field"><span>ワークスペース</span>
+      <select id="adopt-workspace">
+        ${workspaceOptions}
+        <option value="${NEW_VALUE}"${known ? "" : " selected"}>＋ このフォルダを新しいワークスペースにする</option>
+      </select>
+      <small class="hint">${known
+        ? "このフォルダは登録済みです。既存のワークスペースに配属できます。"
+        : "未登録のフォルダなので、新しいワークスペースとして追加します。"}</small></label>
+  `;
+
+  setAdoptStatus("");
+  document.getElementById("adopt-modal").hidden = false;
+}
+
+function sameFolder(a, b) {
+  // 区切り文字・末尾のスラッシュ・大文字小文字を揃えて比べる（Windows想定）。
+  const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+function closeAdopt() {
+  document.getElementById("adopt-modal").hidden = true;
+  adoptTarget = null;
+}
+
+function setAdoptStatus(text, isError) {
+  const el = document.getElementById("adopt-status");
+  el.textContent = text;
+  el.classList.toggle("error", Boolean(isError));
+}
+
+async function confirmAdopt() {
+  if (!adoptTarget) return;
+  const button = document.getElementById("adopt-confirm");
+
+  let dept = document.getElementById("adopt-dept").value;
+  if (dept === NEW_VALUE) {
+    dept = (window.prompt("新しい部署の名前") || "").trim();
+    if (!dept) return;
+  }
+  const workspaceValue = document.getElementById("adopt-workspace").value;
+
+  button.disabled = true;
+  setAdoptStatus("迎え入れています...");
+  try {
+    const res = await fetch("/api/adopt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session: adoptTarget.session,
+        cwd: adoptTarget.cwd,
+        name: document.getElementById("adopt-name").value.trim(),
+        role: document.getElementById("adopt-role").value.trim(),
+        dept,
+        sprite: guestSprite(adoptTarget.session),
+        workspace: workspaceValue === NEW_VALUE
+          ? { name: adoptTarget.folder }
+          : { key: workspaceValue },
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setAdoptStatus(data.error || `迎え入れに失敗しました (${res.status})`, true);
+      return;
+    }
+    // 迎え入れた先のワークスペースを開いて、配属先がすぐ見えるようにする。
+    await loadOffice();
+    selectWorkspace(data.workspace);
+    closeAdopt();
+  } catch (e) {
+    setAdoptStatus(`エラー: ${e.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function setupAdopt() {
+  document.getElementById("adopt-close").addEventListener("click", closeAdopt);
+  document.getElementById("adopt-cancel").addEventListener("click", closeAdopt);
+  document.getElementById("adopt-confirm").addEventListener("click", confirmAdopt);
+  document.getElementById("adopt-modal").addEventListener("click", (e) => {
+    if (e.target.id === "adopt-modal") closeAdopt();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAdopt();
+  });
 }
 
 function renderAgent(agent, data) {
@@ -346,11 +577,11 @@ function renderSubagents(agentId, activeSubagents) {
   }
 }
 
-function renderReport(projectKey, report) {
-  if (lastRenderedReportAt[projectKey] === report.at) return;
-  const panel = document.querySelector(`[data-reply="${CSS.escape(projectKey)}"]`);
+function renderReport(workspaceKey, report) {
+  if (lastRenderedReportAt[workspaceKey] === report.at) return;
+  const panel = document.querySelector(`[data-reply="${CSS.escape(workspaceKey)}"]`);
   if (!panel) return;
-  lastRenderedReportAt[projectKey] = report.at;
+  lastRenderedReportAt[workspaceKey] = report.at;
   panel.querySelector(".reply-title").textContent = `${report.name}（${report.dept}）からの回答`;
   panel.querySelector(".reply-text").innerHTML = renderMarkdown(report.text);
 }
@@ -448,6 +679,7 @@ function setupLogToggle() {
 
 async function init() {
   setupLogToggle();
+  setupAdopt();
   try {
     await loadOffice();
   } catch (e) {

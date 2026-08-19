@@ -57,9 +57,9 @@ def system_prompt_for(cfg, agent):
         with open(role_path, encoding="utf-8") as f:
             parts.append(f.read())
 
-    projects = project_prompt(cfg, agent)
-    if projects:
-        parts.append(projects)
+    workspaces = workspace_prompt(cfg, agent)
+    if workspaces:
+        parts.append(workspaces)
 
     relations = relationship_prompt(cfg, agent)
     if relations:
@@ -68,19 +68,19 @@ def system_prompt_for(cfg, agent):
     return "\n\n".join(parts) if parts else None
 
 
-def project_prompt(cfg, agent):
-    """担当プロジェクトを伝える。2つ目以降がある場合だけ書く。
+def workspace_prompt(cfg, agent):
+    """担当ワークスペースを伝える。2つ目以降がある場合だけ書く。
 
     1つだけならカレントディレクトリがそれなので、わざわざ説明する必要がない。
     """
-    keys = agent.get("projects") or []
+    keys = agent.get("workspaces") or []
     if len(keys) < 2:
         return ""
 
-    defined = cfg.get("projects") or {}
-    paths = officeconfig.project_paths(cfg, agent)
+    defined = cfg.get("workspaces") or {}
+    paths = officeconfig.workspace_paths(cfg, agent)
     lines = [f"- {defined.get(k, {}).get('name', k)}: {p}" for k, p in zip(keys, paths)]
-    return ("あなたは以下のプロジェクトを担当しています。1つ目が現在の作業ディレクトリで、\n"
+    return ("あなたは以下のワークスペースを担当しています。1つ目が現在の作業ディレクトリで、\n"
             "残りも読み書きできます:\n\n" + "\n".join(lines))
 
 
@@ -280,8 +280,8 @@ def run_instruction(agent_id, instruction):
     if not agent:
         raise ValueError(f"エージェント {agent_id} は設定に存在しません。")
 
-    # 担当プロジェクトの1つ目で動かし、2つ目以降は --add-dir で触れるようにする。
-    workdir, *extra_dirs = officeconfig.project_paths(cfg, agent)
+    # 担当ワークスペースの1つ目で動かし、2つ目以降は --add-dir で触れるようにする。
+    workdir, *extra_dirs = officeconfig.workspace_paths(cfg, agent)
 
     if os.path.exists(sess_path):
         with open(sess_path, encoding="utf-8") as f:
@@ -324,6 +324,93 @@ def run_instruction(agent_id, instruction):
     if result.returncode != 0:
         report = f"[エラー exit={result.returncode}] {result.stderr.strip()[:500]}\n{report}"
     patch_state(agent_id, last_report=report, last_report_at=time.time())
+
+
+def next_agent_id(cfg):
+    """空いている内部IDを1つ選ぶ。"""
+    used = set(officeconfig.agent_ids(cfg))
+    for char in "ABCEFGHIJKLNOQRTUVWXYZ":
+        if char not in used:
+            return char
+    n = 1
+    while f"A{n}" in used:
+        n += 1
+    return f"A{n}"
+
+
+def adopt_session(payload):
+    """ロビーで見つけたセッションを、社員として迎え入れる。
+
+    セッションIDさえ分かれば --resume で会話を継続できる。オフィスが自分で
+    起動したものである必要はないので、外で走っていたものを組織に組み込める。
+    """
+    session_id = str(payload.get("session") or "").strip()
+    if not session_id:
+        raise officeconfig.ConfigError("セッションIDがありません。")
+
+    cfg = officeconfig.load()
+    if session_id in managed_sessions():
+        raise officeconfig.ConfigError("このセッションはすでに社員に割り当てられています。")
+
+    workspace_key = resolve_adopt_workspace(cfg, payload)
+    agent_id = next_agent_id(cfg)
+    name = str(payload.get("name") or "").strip() or "引き継ぎ社員"
+
+    cfg["agents"].append({
+        "id": agent_id,
+        "name": name,
+        "dept": str(payload.get("dept") or "").strip() or "未所属",
+        "role": str(payload.get("role") or "").strip() or "担当",
+        "sprite": str(payload.get("sprite") or "").strip(),
+        "soul": "",
+        "workspaces": [workspace_key],
+        "consults": [],
+        "subagents": [],
+    })
+
+    validated = officeconfig.save(cfg)
+    agent = officeconfig.agent_map(validated)[agent_id]
+
+    # 人格は空のまま作る。設定画面から書ける入れ物だけ用意しておく。
+    if not officeconfig.read_soul(agent["soul"]).strip():
+        officeconfig.write_soul(agent["soul"], f"# SOUL: {name}\n\n## 人格\n\n\n## 話し方\n\n\n## クセ・キャラクター付け\n")
+
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    with open(session_file(agent_id), "w", encoding="utf-8") as f:
+        f.write(session_id)
+    return {"agent": agent, "workspace": workspace_key, "config": validated}
+
+
+def resolve_adopt_workspace(cfg, payload):
+    """迎え入れ先のワークスペースを決める。無ければ作る。"""
+    workspaces = cfg.setdefault("workspaces", {})
+    requested = payload.get("workspace") or {}
+
+    key = str(requested.get("key") or "").strip()
+    if key:
+        if key not in workspaces:
+            raise officeconfig.ConfigError(f"ワークスペースが見つかりません: {key}")
+        return key
+
+    # セッションが開いているディレクトリを、そのまま新しいワークスペースにする。
+    cwd = str(payload.get("cwd") or "").strip()
+    if not cwd or not os.path.isdir(cwd):
+        raise officeconfig.ConfigError(f"作業ディレクトリが見つかりません: {cwd}")
+
+    path = relative_to_base(cwd)
+    for existing, meta in workspaces.items():
+        if meta.get("path") == path:
+            return existing
+
+    n = 1
+    while f"workspace{n}" in workspaces:
+        n += 1
+    new_key = f"workspace{n}"
+    workspaces[new_key] = {
+        "name": str(requested.get("name") or "").strip() or os.path.basename(cwd) or new_key,
+        "path": path,
+    }
+    return new_key
 
 
 def managed_sessions():
@@ -440,6 +527,10 @@ class Handler(SimpleHTTPRequestHandler):
             "souls": souls,
             "sprites": officeconfig.available_sprites(),
             "subagent_catalog": officeconfig.subagent_catalog(),
+            # 相対パス("."など)のままだと、ブラウザ側からは実際の場所が分からない。
+            # ロビーのセッションと同じ場所かを比べるために解決済みの絶対パスも渡す。
+            "workspace_paths": {key: officeconfig.workspace_path(cfg, key)
+                                for key in (cfg.get("workspaces") or {})},
         })
 
     # ---- POST -------------------------------------------------------------
@@ -449,6 +540,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/instruct": self.handle_instruct,
             "/api/office": self.handle_save_office,
             "/api/pick-directory": self.handle_pick_directory,
+            "/api/adopt": self.handle_adopt,
         }.get(self.path)
         if not route:
             self.send_json(404, {"error": "not found"})
@@ -532,6 +624,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(200, {"cancelled": True})
             return
         self.send_json(200, {"path": relative_to_base(path), "absolute": path})
+
+    def handle_adopt(self):
+        try:
+            result = adopt_session(self.read_json())
+        except officeconfig.ConfigError as e:
+            self.send_json(400, {"error": str(e)})
+            return
+        except Exception as e:
+            self.send_json(500, {"error": f"迎え入れに失敗しました: {e}"})
+            return
+        self.send_json(200, result)
 
     def apply_subagents(self, payload):
         """サブエージェント定義の追加・更新・削除をまとめて反映する。"""

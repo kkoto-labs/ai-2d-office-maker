@@ -88,7 +88,7 @@ def _summarize(session_id, record, path):
     return {
         "session": session_id,
         "short": session_id[:8],
-        "project": os.path.basename(cwd.replace("\\", "/").rstrip("/")) or "不明",
+        "folder": os.path.basename(cwd.replace("\\", "/").rstrip("/")) or "不明",
         "cwd": cwd,
         "state": state,
         "detail": detail,

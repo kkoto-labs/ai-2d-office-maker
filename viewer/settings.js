@@ -1,6 +1,6 @@
 // 設定画面（settings.html）。オフィス画面とは別ページで動く。
 
-const PROJECTS_KEY = "__projects__";
+const WORKSPACES_KEY = "__workspaces__";
 const SUBAGENTS_KEY = "__subagents__";
 const CHART_KEY = "__chart__";
 const DEPTS_KEY = "__departments__";
@@ -82,7 +82,7 @@ function startEditing() {
   });
   deletedSubagentFiles = [];
   selectedSubagent = 0;
-  selectedKey = draft.agents.length ? draft.agents[0].id : PROJECTS_KEY;
+  selectedKey = draft.agents.length ? draft.agents[0].id : WORKSPACES_KEY;
   setSettingsStatus("");
   document.getElementById("settings-subtitle").textContent =
     `エージェント ${draft.agents.length}人・部下 ${draftSubagents.length}人・`
@@ -151,7 +151,7 @@ function renderSettingsNav() {
   for (const [key, label, caption] of [
     [CHART_KEY, "🗺 組織図", "関係性を図で確認する"],
     [DEPTS_KEY, "🏢 部署", "部署の新設と上下関係"],
-    [PROJECTS_KEY, "📁 プロジェクト", "作業ディレクトリの管理"],
+    [WORKSPACES_KEY, "📁 ワークスペース", "作業ディレクトリの管理"],
   ]) {
     const li = document.createElement("li");
     li.className = `nav-item nav-meta${selectedKey === key ? " active" : ""}`;
@@ -261,8 +261,8 @@ function renderSettingsEditor() {
 
 function renderSelectedEditor() {
   const el = document.getElementById("settings-editor");
-  if (selectedKey === PROJECTS_KEY) {
-    renderProjectsEditor(el);
+  if (selectedKey === WORKSPACES_KEY) {
+    renderWorkspacesEditor(el);
     return;
   }
   if (selectedKey === SUBAGENTS_KEY) {
@@ -286,19 +286,19 @@ function renderSelectedEditor() {
 }
 
 function renderAgentEditor(el, agent) {
-  const primary = agent.projects[0];
-  const projectOptions = Object.entries(draft.projects)
+  const primary = agent.workspaces[0];
+  const workspaceOptions = Object.entries(draft.workspaces)
     .map(([key, p]) => `<option value="${escapeHtml(key)}"${key === primary ? " selected" : ""}>${escapeHtml(p.name)}</option>`)
     .join("");
 
-  const extraProjects = Object.entries(draft.projects)
+  const extraWorkspaces = Object.entries(draft.workspaces)
     .filter(([key]) => key !== primary)
     .map(([key, p]) => `<label class="check-row">
-      <input type="checkbox" data-extra-project="${escapeHtml(key)}"${agent.projects.includes(key) ? " checked" : ""} />
+      <input type="checkbox" data-extra-workspace="${escapeHtml(key)}"${agent.workspaces.includes(key) ? " checked" : ""} />
       <span class="check-name">${escapeHtml(p.name)}</span>
       <span class="check-desc">${escapeHtml(p.path)}</span>
     </label>`)
-    .join("") || '<p class="hint">他に登録されたプロジェクトがありません。</p>';
+    .join("") || '<p class="hint">他に登録されたワークスペースがありません。</p>';
 
   const subagentChoices = subagentChoicesHtml(agent);
 
@@ -335,12 +335,12 @@ function renderAgentEditor(el, agent) {
     </section>
 
     <section class="edit-section">
-      <h3>プロジェクト</h3>
+      <h3>ワークスペース</h3>
       <label class="field"><span>作業ディレクトリ（主）</span>
-        <select data-primary-project>${projectOptions}</select>
+        <select data-primary-workspace>${workspaceOptions}</select>
         <small class="hint">このエージェントへの指示は、ここで選んだディレクトリで実行されます。</small></label>
-      <h4>追加でアクセスできるプロジェクト</h4>
-      <div class="check-list">${extraProjects}</div>
+      <h4>追加でアクセスできるワークスペース</h4>
+      <div class="check-list">${extraWorkspaces}</div>
       <small class="hint">チェックしたディレクトリは <code>--add-dir</code> で渡され、
       作業ディレクトリを離れずに読み書きできます。</small>
     </section>
@@ -464,19 +464,19 @@ function wireAgentEditor(el, agent) {
     renderSettings();
   });
 
-  el.querySelector("[data-primary-project]").addEventListener("change", (e) => {
-    // 主プロジェクトは常に配列の先頭。付け替えたら、元の主は追加側に残す。
-    const others = agent.projects.filter((p) => p !== e.target.value);
-    agent.projects = [e.target.value, ...others];
+  el.querySelector("[data-primary-workspace]").addEventListener("change", (e) => {
+    // 主ワークスペースは常に配列の先頭。付け替えたら、元の主は追加側に残す。
+    const others = agent.workspaces.filter((p) => p !== e.target.value);
+    agent.workspaces = [e.target.value, ...others];
     renderSettingsEditor();
   });
 
-  for (const box of el.querySelectorAll("[data-extra-project]")) {
+  for (const box of el.querySelectorAll("[data-extra-workspace]")) {
     box.addEventListener("change", () => {
-      agent.projects = toggleIn(agent.projects, box.dataset.extraProject, box.checked);
-      // 先頭＝主プロジェクトの位置関係は崩さない。
-      const primaryKey = el.querySelector("[data-primary-project]").value;
-      agent.projects = [primaryKey, ...agent.projects.filter((p) => p !== primaryKey)];
+      agent.workspaces = toggleIn(agent.workspaces, box.dataset.extraWorkspace, box.checked);
+      // 先頭＝主ワークスペースの位置関係は崩さない。
+      const primaryKey = el.querySelector("[data-primary-workspace]").value;
+      agent.workspaces = [primaryKey, ...agent.workspaces.filter((p) => p !== primaryKey)];
     });
   }
 
@@ -1197,74 +1197,74 @@ function deleteSubagent(sub) {
   renderSettings();
 }
 
-function renderProjectsEditor(el) {
-  const rows = Object.entries(draft.projects).map(([key, p]) => `
-    <div class="project-row" data-project="${escapeHtml(key)}">
+function renderWorkspacesEditor(el) {
+  const rows = Object.entries(draft.workspaces).map(([key, p]) => `
+    <div class="workspace-row" data-workspace="${escapeHtml(key)}">
       <label class="field"><span>表示名</span>
-        <input type="text" data-project-field="name" value="${escapeHtml(p.name)}" maxlength="40" /></label>
+        <input type="text" data-workspace-field="name" value="${escapeHtml(p.name)}" maxlength="40" /></label>
       <label class="field"><span>パス</span>
         <div class="path-row">
-          <input type="text" data-project-field="path" value="${escapeHtml(p.path)}" />
-          <button type="button" class="btn-ghost btn-small" data-project-browse>参照…</button>
+          <input type="text" data-workspace-field="path" value="${escapeHtml(p.path)}" />
+          <button type="button" class="btn-ghost btn-small" data-workspace-browse>参照…</button>
         </div></label>
-      <button type="button" class="btn-danger btn-small" data-project-delete>削除</button>
+      <button type="button" class="btn-danger btn-small" data-workspace-delete>削除</button>
     </div>
   `).join("");
 
   el.innerHTML = `
     <section class="edit-section">
-      <h3>プロジェクト</h3>
+      <h3>ワークスペース</h3>
       <p class="hint">エージェントが作業するディレクトリです。相対パスはこのリポジトリからの
       相対、絶対パスもそのまま使えます。存在しないパスは保存時に弾かれます。</p>
       <p class="warn">指示は <code>--permission-mode auto</code> で実行されます。
       ここに追加したディレクトリは、確認プロンプトなしで読み書きされます。</p>
-      <div class="project-list">${rows}</div>
-      <button type="button" class="btn-ghost" id="project-add">＋ プロジェクトを追加</button>
+      <div class="workspace-list">${rows}</div>
+      <button type="button" class="btn-ghost" id="workspace-add">＋ ワークスペースを追加</button>
     </section>
   `;
 
-  for (const row of el.querySelectorAll(".project-row")) {
-    const key = row.dataset.project;
-    for (const input of row.querySelectorAll("[data-project-field]")) {
+  for (const row of el.querySelectorAll(".workspace-row")) {
+    const key = row.dataset.workspace;
+    for (const input of row.querySelectorAll("[data-workspace-field]")) {
       input.addEventListener("input", () => {
-        draft.projects[key][input.dataset.projectField] = input.value;
+        draft.workspaces[key][input.dataset.workspaceField] = input.value;
       });
     }
-    row.querySelector("[data-project-browse]").addEventListener("click", (e) => {
-      browseForDirectory(e.currentTarget, row.querySelector('[data-project-field="path"]'), key);
+    row.querySelector("[data-workspace-browse]").addEventListener("click", (e) => {
+      browseForDirectory(e.currentTarget, row.querySelector('[data-workspace-field="path"]'), key);
     });
-    row.querySelector("[data-project-delete]").addEventListener("click", () => {
-      const used = draft.agents.filter((a) => (a.projects || []).includes(key));
+    row.querySelector("[data-workspace-delete]").addEventListener("click", () => {
+      const used = draft.agents.filter((a) => (a.workspaces || []).includes(key));
       if (used.length) {
         setSettingsStatus(
-          `「${draft.projects[key].name}」は ${used.map((a) => a.name).join("・")} が使用中です。`, true);
+          `「${draft.workspaces[key].name}」は ${used.map((a) => a.name).join("・")} が使用中です。`, true);
         return;
       }
-      if (Object.keys(draft.projects).length <= 1) {
-        setSettingsStatus("プロジェクトは1つ以上必要です。", true);
+      if (Object.keys(draft.workspaces).length <= 1) {
+        setSettingsStatus("ワークスペースは1つ以上必要です。", true);
         return;
       }
-      delete draft.projects[key];
+      delete draft.workspaces[key];
       setSettingsStatus("");
       renderSettingsEditor();
     });
   }
 
-  el.querySelector("#project-add").addEventListener("click", () => {
+  el.querySelector("#workspace-add").addEventListener("click", () => {
     let n = 1;
-    while (draft.projects[`project${n}`]) n += 1;
-    const key = `project${n}`;
-    draft.projects[key] = { name: `新しいプロジェクト${n}`, path: "." };
+    while (draft.workspaces[`workspace${n}`]) n += 1;
+    const key = `workspace${n}`;
+    draft.workspaces[key] = { name: `新しいワークスペース${n}`, path: "." };
     renderSettingsEditor();
 
     // 行を足すだけにして、フォルダ選択は「参照…」を押したときだけ開く。
     // 追加した瞬間にOSのダイアログが出ると、名前を入れる前に手が止まる。
-    const row = el.querySelector(`.project-row[data-project="${key}"]`);
-    if (row) row.querySelector('[data-project-field="name"]').focus();
+    const row = el.querySelector(`.workspace-row[data-workspace="${key}"]`);
+    if (row) row.querySelector('[data-workspace-field="name"]').focus();
   });
 }
 
-async function browseForDirectory(button, input, projectKey) {
+async function browseForDirectory(button, input, workspaceKey) {
   const label = button.textContent;
   button.disabled = true;
   button.textContent = "選択中…";
@@ -1285,7 +1285,7 @@ async function browseForDirectory(button, input, projectKey) {
       return;
     }
     input.value = data.path;
-    draft.projects[projectKey].path = data.path;
+    draft.workspaces[workspaceKey].path = data.path;
     setSettingsStatus(`選択しました: ${data.absolute}`);
   } catch (e) {
     setSettingsStatus(`フォルダ選択エラー: ${e.message}`, true);
@@ -1315,7 +1315,7 @@ function addAgent() {
     sprite: office.sprites[0] || SUBAGENT_SPRITE_DEFAULT,
     // 空にしておくと、サーバー側が名前からファイル名を決めてくれる。
     soul: "",
-    projects: [Object.keys(draft.projects)[0]],
+    workspaces: [Object.keys(draft.workspaces)[0]],
     consults: [],
     subagents: [],
   };

@@ -14,6 +14,8 @@
     <a class="topbar-button" href="settings.html">⚙ 設定</a>
   </header>
 
+  <nav class="workspace-tabs" id="workspace-tabs" hidden></nav>
+
   <main class="floor">
     <div class="rooms" id="rooms"></div>
 
@@ -39,6 +41,23 @@
   </main>
 
 
+
+  <div class="modal-backdrop" id="adopt-modal" hidden>
+    <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="adopt-title">
+      <header class="modal-head">
+        <h2 id="adopt-title">セッションを迎え入れる</h2>
+        <button type="button" class="modal-close" id="adopt-close" aria-label="閉じる">×</button>
+      </header>
+      <div class="adopt-body" id="adopt-body"></div>
+      <footer class="modal-foot">
+        <div class="settings-status" id="adopt-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="adopt-cancel">キャンセル</button>
+          <button type="button" class="btn-primary" id="adopt-confirm">迎え入れる</button>
+        </div>
+      </footer>
+    </div>
+  </div>
 
   <script src="common.js"></script>
   <script src="app.js"></script>
